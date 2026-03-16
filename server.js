@@ -97,6 +97,23 @@ app.delete('/api/projetos/:cod', async (req, res) => {
     res.json({sucesso:true}); 
 });
 
+// Rota de Login Segura
+app.post('/api/login', (req, res) => {
+    const { usuario, senha } = req.body;
+
+    // As senhas ficam seguras aqui no backend!
+    if (usuario === 'gerencia' && senha === 'L2pgerencia2026!') {
+        res.json({ tipo: 'admin', nome: 'Gerência' });
+    } 
+    else if (usuario === 'analista' && senha === 'L2panalista2026') {
+        res.json({ tipo: 'user', nome: 'Analista L2P' });
+    } 
+    else {
+        // Retorna erro 401 (Não autorizado) sem expor a senha correta
+        res.status(401).json({ erro: 'Usuário ou senha incorretos' });
+    }
+});
+
 // 3. Inicialização do Servidor
 // Importante: O Render exige que a porta seja dinâmica (process.env.PORT)
 const PORT = process.env.PORT || 3000;
