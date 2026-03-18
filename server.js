@@ -26,7 +26,15 @@ mongoose.connect(mongoURI)
 
 // --- MODELOS ---
 const Apropriacao = mongoose.model('Apropriacao', new mongoose.Schema({ data: String, dados_dia: Object }));
-const Funcionario = mongoose.model('Funcionario', new mongoose.Schema({ mat: String, nome: String }));
+
+// 🔥 AQUI ESTÁ A CORREÇÃO: Adicionamos cargo e custoDiario no Modelo do banco!
+const Funcionario = mongoose.model('Funcionario', new mongoose.Schema({ 
+    mat: String, 
+    nome: String,
+    cargo: { type: String, default: 'Não informado' },
+    custoDiario: { type: Number, default: 0 }
+}));
+
 const Projeto = mongoose.model('Projeto', new mongoose.Schema({ codigo: String }));
 
 // --- FUNÇÃO DE SEMENTE (DATABASE SEED) ---
@@ -34,10 +42,14 @@ async function semearBanco() {
     const fCount = await Funcionario.countDocuments();
     if (fCount === 0) {
         const iniciais = [
-            { mat: "79", nome: "Amarildo Fernandes Rosa" }, { mat: "56", nome: "André Luis Teixeira" },
-            { mat: "88", nome: "Anderson dos Santos Silva" }, { mat: "27", nome: "Cicero Fernandes De Morais" },
-            { mat: "91", nome: "Diogo Bassi Rosa" }, { mat: "73", nome: "Douglas Silva Neves" },
-            { mat: "38", nome: "Edeilson Bezerra Rocha" }, { mat: "57", nome: "Edmundo Vilas Boas Filho" }
+            { mat: "79", nome: "Amarildo Fernandes Rosa", cargo: "Eletricista", custoDiario: 150 }, 
+            { mat: "56", nome: "André Luis Teixeira", cargo: "Mecânico", custoDiario: 180 },
+            { mat: "88", nome: "Anderson dos Santos Silva", cargo: "Ajudante", custoDiario: 100 }, 
+            { mat: "27", nome: "Cicero Fernandes De Morais", cargo: "Eletricista", custoDiario: 150 },
+            { mat: "91", nome: "Diogo Bassi Rosa", cargo: "Encarregado", custoDiario: 250 }, 
+            { mat: "73", nome: "Douglas Silva Neves", cargo: "Técnico", custoDiario: 200 },
+            { mat: "38", nome: "Edeilson Bezerra Rocha", cargo: "Ajudante", custoDiario: 100 }, 
+            { mat: "57", nome: "Edmundo Vilas Boas Filho", cargo: "Eletricista", custoDiario: 150 }
         ];
         await Funcionario.insertMany(iniciais);
         await Projeto.insertMany([{codigo:'230304'}, {codigo:'242236'}, {codigo:'C522006'}, {codigo:'ATESTADO'}]);
@@ -69,6 +81,7 @@ app.get('/api/equipe', async (req, res) => res.json(await Funcionario.find().sor
 
 app.post('/api/equipe', async (req, res) => { 
     try {
+        // Agora o req.body carrega o mat, nome, cargo e custoDiario, e o banco aceita todos!
         await new Funcionario(req.body).save(); 
         res.json({sucesso:true}); 
     } catch (err) { res.status(500).json({ erro: err.message }); }
