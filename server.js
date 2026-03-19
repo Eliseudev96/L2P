@@ -4,7 +4,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 
-// --- NOVAS IMPORTAÇÕES (AUTOMAÇÃO E ARQUIVOS) ---
+// --- IMPORTAÇÕES DA AUTOMAÇÃO E ARQUIVOS ---
 const cron = require('node-cron');
 const msal = require('@azure/msal-node');
 const { Client } = require('@microsoft/microsoft-graph-client');
@@ -15,10 +15,10 @@ const app = express();
 app.use(cors({ origin: '*' })); 
 app.use(express.json());
 
-// Configuração do Recebedor de Arquivos (Limita em 10MB para o MongoDB não travar)
+// Configuração do Recebedor de Arquivos (Limita em 15MB)
 const upload = multer({ 
     storage: multer.memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024 } 
+    limits: { fileSize: 15 * 1024 * 1024 } 
 });
 
 // 2. Conexão Segura com MongoDB
@@ -64,7 +64,7 @@ const Documento = mongoose.model('Documento', new mongoose.Schema({
     ext: String,
     tamanho: String,
     data: String,
-    arquivoBase64: String // Guarda o arquivo físico convertido em texto
+    arquivoBase64: String 
 }));
 
 // --- FUNÇÃO DE SEMENTE (DATABASE SEED) ---
@@ -73,13 +73,7 @@ async function semearBanco() {
     if (fCount === 0) {
         const iniciais = [
             { mat: "79", nome: "Amarildo Fernandes Rosa", cargo: "Eletricista", custoDiario: 150 }, 
-            { mat: "56", nome: "André Luis Teixeira", cargo: "Mecânico", custoDiario: 180 },
-            { mat: "88", nome: "Anderson dos Santos Silva", cargo: "Ajudante", custoDiario: 100 }, 
-            { mat: "27", nome: "Cicero Fernandes De Morais", cargo: "Eletricista", custoDiario: 150 },
-            { mat: "91", nome: "Diogo Bassi Rosa", cargo: "Encarregado", custoDiario: 250 }, 
-            { mat: "73", nome: "Douglas Silva Neves", cargo: "Técnico", custoDiario: 200 },
-            { mat: "38", nome: "Edeilson Bezerra Rocha", cargo: "Ajudante", custoDiario: 100 }, 
-            { mat: "57", nome: "Edmundo Vilas Boas Filho", cargo: "Eletricista", custoDiario: 150 }
+            { mat: "91", nome: "Diogo Bassi Rosa", cargo: "Encarregado", custoDiario: 250 }
         ];
         await Funcionario.insertMany(iniciais);
         await Projeto.insertMany([{codigo:'230304'}, {codigo:'242236'}, {codigo:'C522006'}, {codigo:'ATESTADO'}]);
@@ -148,9 +142,62 @@ async function sincronizarPlanilha() {
     }
 }
 
+// ==========================================
+// 👷 AUTOMATIZADOR DE RESIDENTES
+// ==========================================
+async function lancarHorasResidentes() {
+    console.log("🔄 Iniciando o salvamento automático de Residentes...");
+    try {
+        // Pega a data de HOJE ajustada para o fuso horário do Brasil
+        const objData = new Date();
+        const tzOffset = objData.getTimezoneOffset() * 60000;
+        const hoje = new Date(objData.getTime() - tzOffset);
+        const dataStr = hoje.toISOString().split('T')[0];
+
+        // Pula sábados (6) e domingos (0)
+        const diaSemana = hoje.getUTCDay();
+        if (diaSemana === 0 || diaSemana === 6) {
+            console.log("⏸️ Fim de semana: Lançamento de residentes pausado hoje.");
+            return;
+        }
+
+        // Acha todo mundo que é residente na equipe
+        const residentes = await Funcionario.find({ isResidente: true });
+        if (residentes.length === 0) return;
+
+        // Busca a apropriação de HOJE no banco
+        let apropriacaoHoje = await Apropriacao.findOne({ data: dataStr });
+        let dados_dia = apropriacaoHoje ? apropriacaoHoje.dados_dia : {};
+        let teveMudanca = false;
+
+        // Preenche as 9h no banco só para quem ainda não tem horas lançadas hoje
+        residentes.forEach(func => {
+            if (!dados_dia[func.mat] && func.projetoResidente) {
+                dados_dia[func.mat] = { h1: 9, p1: func.projetoResidente };
+                teveMudanca = true;
+            }
+        });
+
+        // Se o robô preencheu alguém, ele salva no banco de dados oficial!
+        if (teveMudanca) {
+            await Apropriacao.findOneAndUpdate(
+                { data: dataStr },
+                { dados_dia: dados_dia },
+                { upsert: true }
+            );
+            console.log(`✅ Horas salvas automaticamente no banco para ${residentes.length} residentes!`);
+        } else {
+            console.log(`✅ Todos os residentes já estavam com as horas salvas hoje.`);
+        }
+    } catch (error) {
+        console.error("❌ Erro ao lançar residentes:", error.message);
+    }
+}
+
 // ⏰ O DESPERTADOR: Roda automaticamente todo dia às 02:00 da manhã
-cron.schedule('0 2 * * *', () => {
-    sincronizarPlanilha();
+cron.schedule('0 2 * * *', async () => {
+    await sincronizarPlanilha();
+    await lancarHorasResidentes(); // O robô agora salva as horas sozinho de madrugada
 });
 
 
@@ -243,7 +290,6 @@ app.get('/api/equipe', async (req, res) => res.json(await Funcionario.find().sor
 
 app.post('/api/equipe', async (req, res) => { 
     try {
-        // Se enviou ID ou Matrícula que já existe, atualiza. Se não, cria.
         await Funcionario.findOneAndUpdate({ mat: req.body.mat }, req.body, { upsert: true }); 
         res.json({sucesso:true}); 
     } catch (err) { res.status(500).json({ erro: err.message }); }
