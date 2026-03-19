@@ -36,7 +36,10 @@ const Funcionario = mongoose.model('Funcionario', new mongoose.Schema({
     mat: String, 
     nome: String,
     cargo: { type: String, default: 'Não informado' },
-    custoDiario: { type: Number, default: 0 }
+    custoDiario: { type: Number, default: 0 },
+    // 🔥 NOVIDADE: Campos para controle do Colaborador Residente
+    isResidente: { type: Boolean, default: false },
+    projetoResidente: { type: String, default: '' }
 }));
 
 const Projeto = mongoose.model('Projeto', new mongoose.Schema({ codigo: String }));
@@ -65,7 +68,7 @@ async function semearBanco() {
 // 🚀 MOTOR DE AUTOMAÇÃO MICROSOFT 365
 // ==========================================
 
-// Configuração das Chaves (Precisam estar no Render em Environment)
+// Configuração das Chaves
 const msalConfig = {
     auth: {
         clientId: process.env.CLIENT_ID,
@@ -82,7 +85,7 @@ async function getGraphClient() {
     return Client.init({ authProvider: (done) => done(null, authResponse.accessToken) });
 }
 
-// Converte a URL do Excel no formato maluco que a Microsoft exige
+// Converte a URL do Excel no formato exigido pela Microsoft
 function encodeShareUrl(url) {
     const base64 = Buffer.from(url).toString('base64');
     return 'u!' + base64.replace(/=/g, '').replace(/\//g, '_').replace(/\+/g, '-');
@@ -130,8 +133,8 @@ async function sincronizarPlanilha() {
     }
 }
 
-// ⏰ O DESPERTADOR: Roda automaticamente de hora em hora
-cron.schedule('0 * * * *', () => {
+// ⏰ O DESPERTADOR: Roda automaticamente todo dia às 02:00 da manhã
+cron.schedule('0 2 * * *', () => {
     sincronizarPlanilha();
 });
 
