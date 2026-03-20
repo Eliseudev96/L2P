@@ -4,25 +4,25 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 
-// --- IMPORTAÇÕES DA AUTOMAÇÃO E FICHEIROS ---
+// --- IMPORTAÇÕES DA AUTOMAÇÃO E ARQUIVOS ---
 const cron = require('node-cron');
 const msal = require('@azure/msal-node');
 const { Client } = require('@microsoft/microsoft-graph-client');
 require('isomorphic-fetch');
 const multer = require('multer');
-const ExcelJS = require('exceljs'); // Biblioteca para preencher a folha de cálculo molde
+const ExcelJS = require('exceljs'); 
 
 const app = express();
 app.use(cors({ origin: '*' })); 
 app.use(express.json());
 
-// Configuração do Recebedor de Ficheiros (Limita em 15MB)
+// Configuração do Recebedor de Arquivos (Limita em 15MB)
 const upload = multer({ 
     storage: multer.memoryStorage(),
     limits: { fileSize: 15 * 1024 * 1024 } 
 });
 
-// 2. Ligação Segura com MongoDB
+// 2. Conexão Segura com MongoDB
 const mongoURI = process.env.MONGO_URI;
 
 if (!mongoURI) {
@@ -32,13 +32,13 @@ if (!mongoURI) {
 
 mongoose.connect(mongoURI)
     .then(() => {
-        console.log('🟢 MongoDB Atlas Ligado com Segurança!');
+        console.log('🟢 MongoDB Atlas Conectado com Segurança!');
         semearBanco(); 
     })
-    .catch(err => console.error("❌ Erro ao ligar ao MongoDB:", err));
+    .catch(err => console.error("❌ Erro ao conectar ao MongoDB:", err));
 
 // ==========================================
-// --- MODELOS DA BASE DE DADOS ---
+// --- MODELOS DO BANCO DE DADOS ---
 // ==========================================
 const Apropriacao = mongoose.model('Apropriacao', new mongoose.Schema({ 
     data: String, 
@@ -78,7 +78,6 @@ async function semearBanco() {
         ];
         await Funcionario.insertMany(iniciais);
         await Projeto.insertMany([{codigo:'230304'}, {codigo:'242236'}, {codigo:'C522006'}, {codigo:'ATESTADO'}]);
-        console.log('✅ Dados iniciais criados na base de dados!');
     }
 }
 
@@ -106,7 +105,7 @@ function encodeShareUrl(url) {
 }
 
 async function sincronizarPlanilha() {
-    console.log("🔄 A iniciar a sincronização com Microsoft 365...");
+    console.log("🔄 Iniciando sincronização com Microsoft 365...");
     try {
         if (!process.env.PLANILHA_URL) throw new Error("A variável PLANILHA_URL não foi configurada.");
         
@@ -147,7 +146,6 @@ async function sincronizarPlanilha() {
 // 👷 AUTOMATIZADOR DE RESIDENTES
 // ==========================================
 async function lancarHorasResidentes() {
-    console.log("🔄 A iniciar o registo automático de Residentes...");
     try {
         const objData = new Date();
         const tzOffset = objData.getTimezoneOffset() * 60000;
@@ -155,10 +153,7 @@ async function lancarHorasResidentes() {
         const dataStr = hoje.toISOString().split('T')[0];
 
         const diaSemana = hoje.getUTCDay();
-        if (diaSemana === 0 || diaSemana === 6) {
-            console.log("⏸️ Fim de semana: Registo de residentes em pausa hoje.");
-            return;
-        }
+        if (diaSemana === 0 || diaSemana === 6) return;
 
         const residentes = await Funcionario.find({ isResidente: true });
         if (residentes.length === 0) return;
@@ -175,21 +170,13 @@ async function lancarHorasResidentes() {
         });
 
         if (teveMudanca) {
-            await Apropriacao.findOneAndUpdate(
-                { data: dataStr },
-                { dados_dia: dados_dia },
-                { upsert: true }
-            );
-            console.log(`✅ Horas guardadas automaticamente na base de dados para ${residentes.length} residentes!`);
-        } else {
-            console.log(`✅ Todos os residentes já tinham as horas guardadas hoje.`);
+            await Apropriacao.findOneAndUpdate({ data: dataStr }, { dados_dia: dados_dia }, { upsert: true });
         }
     } catch (error) {
         console.error("❌ Erro ao lançar residentes:", error.message);
     }
 }
 
-// ⏰ O DESPERTADOR: Roda automaticamente todos os dias às 02:00 da manhã
 cron.schedule('0 2 * * *', async () => {
     await sincronizarPlanilha();
     await lancarHorasResidentes(); 
@@ -200,87 +187,89 @@ cron.schedule('0 2 * * *', async () => {
 // --- ROTAS DA API ---
 // ==========================================
 
-// --- ROTA INTELIGENTE: EXPORTAR FOLHA FINANCEIRA A PARTIR DA BD COM PROTEÇÃO ---
+// --- ROTA INTELIGENTE DE EXPORTAÇÃO FINANCEIRA (À PROVA DE FÓRMULAS) ---
 app.post('/api/financeiro/exportar', async (req, res) => {
     try {
-        console.log("📥 A iniciar exportação financeira...");
         const { projeto, cabecalho, linhas } = req.body;
         
         if (!linhas) throw new Error("A lista de lançamentos não foi enviada pelo Front-end.");
 
-        // 1. Procura a folha de cálculo na base de dados
-        console.log("🔍 A buscar o template na base de dados...");
         const templateDoc = await Documento.findOne({ nome: 'CONTROLE_FINANCEIRO_PROJETO.xlsx' });
-        
         if (!templateDoc) {
-            return res.status(404).json({ 
-                erro: "Molde não encontrado! Vá ao separador 'Documentos' e faça o carregamento do ficheiro com o nome exato: CONTROLE_FINANCEIRO_PROJETO.xlsx" 
-            });
+            return res.status(404).json({ erro: "Molde não encontrado! Faça o upload exato de: CONTROLE_FINANCEIRO_PROJETO.xlsx" });
         }
 
-        // 2. Converte o Base64
-        console.log("📦 A converter o ficheiro base64...");
         const buffer = Buffer.from(templateDoc.arquivoBase64, 'base64');
-
-        // 3. Tenta abrir o ficheiro com o ExcelJS
-        console.log("📊 A ler a estrutura do Excel...");
         const workbook = new ExcelJS.Workbook();
         
         try {
             await workbook.xlsx.load(buffer);
         } catch (errExcel) {
-            throw new Error("O ficheiro guardado nos Documentos não é um Excel válido (.xlsx). Pode estar a usar um ficheiro .csv que foi renomeado.");
+            throw new Error("O arquivo salvo nos Documentos não é um Excel válido (.xlsx).");
         }
 
-        // 🔥 CORREÇÃO: Procura exatamente pelo nome do separador 'Planilha1 (2)' ou pega o primeiro disponível!
         const worksheet = workbook.getWorksheet('Planilha1 (2)') || workbook.worksheets[0];
-        
-        if (!worksheet) {
-            throw new Error("Não foi possível encontrar nenhum separador no ficheiro Excel.");
-        }
+        if (!worksheet) throw new Error("Não foi possível encontrar a aba no arquivo Excel.");
 
-        // 4. Injeta os Cabeçalhos garantindo que são números onde apropriado
-        console.log("✍️ A preencher o cabeçalho...");
-        const toNumber = (val) => parseFloat(val) || 0;
+        // Função protetora: só injeta se tiver valor. Se for vazio, deixa a fórmula do Excel viva!
+        const fillIfPresent = (cell, value) => {
+            if (value !== undefined && value !== null && value !== '') {
+                worksheet.getCell(cell).value = parseFloat(value) || 0;
+            }
+        };
 
-        worksheet.getCell('D3').value = cabecalho.empresa || 'CLIMATE';
-        worksheet.getCell('D4').value = projeto || '';
-        worksheet.getCell('C5').value = cabecalho.inicio ? cabecalho.inicio.split('-').reverse().join('/') : '';
-        worksheet.getCell('E5').value = cabecalho.centroCusto || '';
-        worksheet.getCell('C6').value = cabecalho.fim ? cabecalho.fim.split('-').reverse().join('/') : '';
-        worksheet.getCell('E6').value = toNumber(cabecalho.saldoBruto);
-        worksheet.getCell('C7').value = toNumber(cabecalho.rateioCC);
-        worksheet.getCell('E7').value = toNumber(cabecalho.saldoLiquido);
-        
-        worksheet.getCell('E9').value = toNumber(cabecalho.valorAntecipado);
-        
-        worksheet.getCell('C10').value = toNumber(cabecalho.receitaPrevista);
-        worksheet.getCell('E10').value = toNumber(cabecalho.receitaReal);
-        worksheet.getCell('C11').value = toNumber(cabecalho.impostoPrevisto);
-        worksheet.getCell('E11').value = toNumber(cabecalho.impostoReal);
-        worksheet.getCell('C12').value = toNumber(cabecalho.margemPrevista);
-        worksheet.getCell('E12').value = toNumber(cabecalho.margemReal);
-        worksheet.getCell('C13').value = toNumber(cabecalho.materialPrevisto);
-        worksheet.getCell('E13').value = toNumber(cabecalho.materialReal);
-        worksheet.getCell('C14').value = toNumber(cabecalho.servicoPrevisto);
-        worksheet.getCell('E14').value = toNumber(cabecalho.servicoReal);
-        worksheet.getCell('C15').value = toNumber(cabecalho.custoFinanPrevisto);
-        worksheet.getCell('E15').value = toNumber(cabecalho.custoFinanReal);
+        const fillTextIfPresent = (cell, value) => {
+            if (value) worksheet.getCell(cell).value = value;
+        };
 
-        // 5. Injeta os Lançamentos do Extrato (começando na linha 17)
-        console.log("📝 A preencher lançamentos...");
+        fillTextIfPresent('D3', cabecalho.empresa);
+        fillTextIfPresent('C4', projeto); 
+        fillTextIfPresent('D4', projeto); // Tentamos nas duas para garantir se houver célula mesclada
+        fillTextIfPresent('C5', cabecalho.inicio ? cabecalho.inicio.split('-').reverse().join('/') : '');
+        fillTextIfPresent('D5', cabecalho.centroCusto);
+        fillTextIfPresent('E5', cabecalho.centroCusto);
+        fillTextIfPresent('C6', cabecalho.fim ? cabecalho.fim.split('-').reverse().join('/') : '');
+        
+        fillIfPresent('C7', cabecalho.rateioCC);
+        fillIfPresent('E9', cabecalho.valorAntecipado);
+        fillIfPresent('C10', cabecalho.receitaPrevista);
+        fillIfPresent('E10', cabecalho.receitaReal);
+        fillIfPresent('C11', cabecalho.impostoPrevisto);
+        fillIfPresent('E11', cabecalho.impostoReal);
+        fillIfPresent('C12', cabecalho.margemPrevista);
+        fillIfPresent('E12', cabecalho.margemReal);
+        fillIfPresent('C13', cabecalho.materialPrevisto);
+        fillIfPresent('E13', cabecalho.materialReal);
+        
+        // SERVIÇOS (A sua solicitação)
+        fillIfPresent('C14', cabecalho.servicoPrevisto);
+        fillIfPresent('E14', cabecalho.servicoReal);
+        
+        fillIfPresent('C15', cabecalho.custoFinanPrevisto);
+        fillIfPresent('E15', cabecalho.custoFinanReal);
+
+        // Clonar Estilo da Linha 17 (Preserva Bordas e Cores nos lançamentos novos)
         let row = 17;
+        const rowStyleModel = worksheet.getRow(17);
+        
         linhas.forEach(l => {
-            worksheet.getCell(`B${row}`).value = l.data ? l.data.split('-').reverse().join('/') : '';
-            worksheet.getCell(`C${row}`).value = l.tipo || '';
-            worksheet.getCell(`D${row}`).value = l.desc || '';
-            worksheet.getCell(`E${row}`).value = toNumber(l.valorBruto);
-            worksheet.getCell(`F${row}`).value = toNumber(l.valorLiquido);
+            const currentRow = worksheet.getRow(row);
+            currentRow.getCell('B').value = l.data ? l.data.split('-').reverse().join('/') : '';
+            currentRow.getCell('C').value = l.tipo || '';
+            currentRow.getCell('D').value = l.desc || '';
+            currentRow.getCell('E').value = parseFloat(l.valorBruto || 0);
+            currentRow.getCell('F').value = parseFloat(l.valorLiquido || 0);
+
+            // Aplica a maquiagem original
+            currentRow.getCell('B').style = rowStyleModel.getCell('B').style;
+            currentRow.getCell('C').style = rowStyleModel.getCell('C').style;
+            currentRow.getCell('D').style = rowStyleModel.getCell('D').style;
+            currentRow.getCell('E').style = rowStyleModel.getCell('E').style;
+            currentRow.getCell('F').style = rowStyleModel.getCell('F').style;
+            
             row++;
         });
 
-        // 6. Devolve o Excel pronto e perfeito para descarregar
-        console.log("🚀 A enviar ficheiro pronto para descarregar...");
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename="Financeiro_${projeto || 'Obra'}.xlsx"`);
         
@@ -296,7 +285,7 @@ app.post('/api/financeiro/exportar', async (req, res) => {
 // --- ROTAS DE DOCUMENTOS ---
 app.post('/api/documentos', upload.single('file'), async (req, res) => {
     try {
-        if (!req.file) throw new Error("Nenhum ficheiro enviado.");
+        if (!req.file) throw new Error("Nenhum arquivo enviado.");
         const { nome, area, ext, tamanho, data, tipo } = req.body;
         const arquivoBase64 = req.file.buffer.toString('base64'); 
         
@@ -398,4 +387,4 @@ app.post('/api/login', (req, res) => {
 
 // 3. Inicialização do Servidor
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Servidor L2P a rodar na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor L2P rodando na porta ${PORT}`));
