@@ -4,25 +4,25 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 
-// --- IMPORTAÇÕES DA AUTOMAÇÃO E ARQUIVOS ---
+// --- IMPORTAÇÕES DA AUTOMAÇÃO E FICHEIROS ---
 const cron = require('node-cron');
 const msal = require('@azure/msal-node');
 const { Client } = require('@microsoft/microsoft-graph-client');
 require('isomorphic-fetch');
 const multer = require('multer');
-const ExcelJS = require('exceljs'); // Nova biblioteca para preencher a planilha molde
+const ExcelJS = require('exceljs'); // Biblioteca para preencher a folha de cálculo molde
 
 const app = express();
 app.use(cors({ origin: '*' })); 
 app.use(express.json());
 
-// Configuração do Recebedor de Arquivos (Limita em 15MB)
+// Configuração do Recebedor de Ficheiros (Limita em 15MB)
 const upload = multer({ 
     storage: multer.memoryStorage(),
     limits: { fileSize: 15 * 1024 * 1024 } 
 });
 
-// 2. Conexão Segura com MongoDB
+// 2. Ligação Segura com MongoDB
 const mongoURI = process.env.MONGO_URI;
 
 if (!mongoURI) {
@@ -32,13 +32,13 @@ if (!mongoURI) {
 
 mongoose.connect(mongoURI)
     .then(() => {
-        console.log('🟢 MongoDB Atlas Conectado com Segurança!');
+        console.log('🟢 MongoDB Atlas Ligado com Segurança!');
         semearBanco(); 
     })
-    .catch(err => console.error("❌ Erro ao conectar ao MongoDB:", err));
+    .catch(err => console.error("❌ Erro ao ligar ao MongoDB:", err));
 
 // ==========================================
-// --- MODELOS DO BANCO DE DADOS ---
+// --- MODELOS DA BASE DE DADOS ---
 // ==========================================
 const Apropriacao = mongoose.model('Apropriacao', new mongoose.Schema({ 
     data: String, 
@@ -78,7 +78,7 @@ async function semearBanco() {
         ];
         await Funcionario.insertMany(iniciais);
         await Projeto.insertMany([{codigo:'230304'}, {codigo:'242236'}, {codigo:'C522006'}, {codigo:'ATESTADO'}]);
-        console.log('✅ Dados iniciais semeados no banco de dados!');
+        console.log('✅ Dados iniciais criados na base de dados!');
     }
 }
 
@@ -106,7 +106,7 @@ function encodeShareUrl(url) {
 }
 
 async function sincronizarPlanilha() {
-    console.log("🔄 Iniciando sincronização com Microsoft 365...");
+    console.log("🔄 A iniciar a sincronização com Microsoft 365...");
     try {
         if (!process.env.PLANILHA_URL) throw new Error("A variável PLANILHA_URL não foi configurada.");
         
@@ -147,7 +147,7 @@ async function sincronizarPlanilha() {
 // 👷 AUTOMATIZADOR DE RESIDENTES
 // ==========================================
 async function lancarHorasResidentes() {
-    console.log("🔄 Iniciando o salvamento automático de Residentes...");
+    console.log("🔄 A iniciar o registo automático de Residentes...");
     try {
         const objData = new Date();
         const tzOffset = objData.getTimezoneOffset() * 60000;
@@ -156,7 +156,7 @@ async function lancarHorasResidentes() {
 
         const diaSemana = hoje.getUTCDay();
         if (diaSemana === 0 || diaSemana === 6) {
-            console.log("⏸️ Fim de semana: Lançamento de residentes pausado hoje.");
+            console.log("⏸️ Fim de semana: Registo de residentes em pausa hoje.");
             return;
         }
 
@@ -180,16 +180,16 @@ async function lancarHorasResidentes() {
                 { dados_dia: dados_dia },
                 { upsert: true }
             );
-            console.log(`✅ Horas salvas automaticamente no banco para ${residentes.length} residentes!`);
+            console.log(`✅ Horas guardadas automaticamente na base de dados para ${residentes.length} residentes!`);
         } else {
-            console.log(`✅ Todos os residentes já estavam com as horas salvas hoje.`);
+            console.log(`✅ Todos os residentes já tinham as horas guardadas hoje.`);
         }
     } catch (error) {
         console.error("❌ Erro ao lançar residentes:", error.message);
     }
 }
 
-// ⏰ O DESPERTADOR: Roda automaticamente todo dia às 02:00 da manhã
+// ⏰ O DESPERTADOR: Roda automaticamente todos os dias às 02:00 da manhã
 cron.schedule('0 2 * * *', async () => {
     await sincronizarPlanilha();
     await lancarHorasResidentes(); 
@@ -200,72 +200,90 @@ cron.schedule('0 2 * * *', async () => {
 // --- ROTAS DA API ---
 // ==========================================
 
-// --- ROTA INTELIGENTE: EXPORTAR PLANILHA FINANCEIRA DO BANCO ---
+// --- ROTA INTELIGENTE: EXPORTAR FOLHA FINANCEIRA A PARTIR DA BD COM PROTEÇÃO ---
 app.post('/api/financeiro/exportar', async (req, res) => {
     try {
+        console.log("📥 A iniciar exportação financeira...");
         const { projeto, cabecalho, linhas } = req.body;
         
-        // 1. Procura a planilha exata na aba de Documentos
+        if (!linhas) throw new Error("A lista de lançamentos não foi enviada pelo Front-end.");
+
+        // 1. Procura a folha de cálculo na base de dados
+        console.log("🔍 A buscar o template na base de dados...");
         const templateDoc = await Documento.findOne({ nome: 'CONTROLE_FINANCEIRO_PROJETO.xlsx' });
         
         if (!templateDoc) {
             return res.status(404).json({ 
-                erro: "Molde não encontrado! Vá na aba 'Documentos' e faça o upload do arquivo com o nome exato: CONTROLE_FINANCEIRO_PROJETO.xlsx" 
+                erro: "Molde não encontrado! Vá ao separador 'Documentos' e faça o carregamento do ficheiro com o nome exato: CONTROLE_FINANCEIRO_PROJETO.xlsx" 
             });
         }
 
-        // 2. Converte o Base64 de volta para Arquivo na memória
+        // 2. Converte o Base64
+        console.log("📦 A converter o ficheiro base64...");
         const buffer = Buffer.from(templateDoc.arquivoBase64, 'base64');
 
-        // 3. Abre o arquivo original preservando cores, fórmulas e estilos
+        // 3. Tenta abrir o ficheiro com o ExcelJS
+        console.log("📊 A ler a estrutura do Excel...");
         const workbook = new ExcelJS.Workbook();
-        await workbook.xlsx.load(buffer);
-        const worksheet = workbook.getWorksheet(1);
+        
+        try {
+            await workbook.xlsx.load(buffer);
+        } catch (errExcel) {
+            throw new Error("O ficheiro guardado nos Documentos não é um Excel válido (.xlsx). Pode estar corrompido ou ser um ficheiro .csv renomeado.");
+        }
 
-        // 4. Injeta o Cabeçalho Financeiro
+        const worksheet = workbook.getWorksheet(1);
+        if (!worksheet) throw new Error("Não foi possível encontrar o separador 1 da folha de cálculo.");
+
+        // 4. Injeta os Cabeçalhos garantindo que são números onde apropriado
+        console.log("✍️ A preencher o cabeçalho...");
+        const toNumber = (val) => parseFloat(val) || 0;
+
         worksheet.getCell('D3').value = cabecalho.empresa || 'CLIMATE';
-        worksheet.getCell('D4').value = projeto;
+        worksheet.getCell('D4').value = projeto || '';
         worksheet.getCell('C5').value = cabecalho.inicio ? cabecalho.inicio.split('-').reverse().join('/') : '';
-        worksheet.getCell('E5').value = cabecalho.centroCusto;
+        worksheet.getCell('E5').value = cabecalho.centroCusto || '';
         worksheet.getCell('C6').value = cabecalho.fim ? cabecalho.fim.split('-').reverse().join('/') : '';
-        worksheet.getCell('E6').value = parseFloat(cabecalho.saldoBruto || 0);
-        worksheet.getCell('C7').value = parseFloat(cabecalho.rateioCC || 0);
-        worksheet.getCell('E7').value = parseFloat(cabecalho.saldoLiquido || 0);
+        worksheet.getCell('E6').value = toNumber(cabecalho.saldoBruto);
+        worksheet.getCell('C7').value = toNumber(cabecalho.rateioCC);
+        worksheet.getCell('E7').value = toNumber(cabecalho.saldoLiquido);
         
-        worksheet.getCell('E9').value = parseFloat(cabecalho.valorAntecipado || 0);
+        worksheet.getCell('E9').value = toNumber(cabecalho.valorAntecipado);
         
-        worksheet.getCell('C10').value = parseFloat(cabecalho.receitaPrevista || 0);
-        worksheet.getCell('E10').value = parseFloat(cabecalho.receitaReal || 0);
-        worksheet.getCell('C11').value = parseFloat(cabecalho.impostoPrevisto || 0);
-        worksheet.getCell('E11').value = parseFloat(cabecalho.impostoReal || 0);
-        worksheet.getCell('C12').value = parseFloat(cabecalho.margemPrevista || 0);
-        worksheet.getCell('E12').value = parseFloat(cabecalho.margemReal || 0);
-        worksheet.getCell('C13').value = parseFloat(cabecalho.materialPrevisto || 0);
-        worksheet.getCell('E13').value = parseFloat(cabecalho.materialReal || 0);
-        worksheet.getCell('C14').value = parseFloat(cabecalho.servicoPrevisto || 0);
-        worksheet.getCell('E14').value = parseFloat(cabecalho.servicoReal || 0);
-        worksheet.getCell('C15').value = parseFloat(cabecalho.custoFinanPrevisto || 0);
-        worksheet.getCell('E15').value = parseFloat(cabecalho.custoFinanReal || 0);
+        worksheet.getCell('C10').value = toNumber(cabecalho.receitaPrevista);
+        worksheet.getCell('E10').value = toNumber(cabecalho.receitaReal);
+        worksheet.getCell('C11').value = toNumber(cabecalho.impostoPrevisto);
+        worksheet.getCell('E11').value = toNumber(cabecalho.impostoReal);
+        worksheet.getCell('C12').value = toNumber(cabecalho.margemPrevista);
+        worksheet.getCell('E12').value = toNumber(cabecalho.margemReal);
+        worksheet.getCell('C13').value = toNumber(cabecalho.materialPrevisto);
+        worksheet.getCell('E13').value = toNumber(cabecalho.materialReal);
+        worksheet.getCell('C14').value = toNumber(cabecalho.servicoPrevisto);
+        worksheet.getCell('E14').value = toNumber(cabecalho.servicoReal);
+        worksheet.getCell('C15').value = toNumber(cabecalho.custoFinanPrevisto);
+        worksheet.getCell('E15').value = toNumber(cabecalho.custoFinanReal);
 
         // 5. Injeta os Lançamentos do Extrato (começando na linha 17)
+        console.log("📝 A preencher lançamentos...");
         let row = 17;
         linhas.forEach(l => {
             worksheet.getCell(`B${row}`).value = l.data ? l.data.split('-').reverse().join('/') : '';
-            worksheet.getCell(`C${row}`).value = l.tipo;
-            worksheet.getCell(`D${row}`).value = l.desc;
-            worksheet.getCell(`E${row}`).value = parseFloat(l.valorBruto || 0);
-            worksheet.getCell(`F${row}`).value = parseFloat(l.valorLiquido || 0);
+            worksheet.getCell(`C${row}`).value = l.tipo || '';
+            worksheet.getCell(`D${row}`).value = l.desc || '';
+            worksheet.getCell(`E${row}`).value = toNumber(l.valorBruto);
+            worksheet.getCell(`F${row}`).value = toNumber(l.valorLiquido);
             row++;
         });
 
-        // 6. Devolve o Excel pronto e impecável para o Front-end baixar
+        // 6. Devolve o Excel pronto e perfeito para descarregar
+        console.log("🚀 A enviar ficheiro pronto para descarregar...");
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename="Financeiro_${projeto}.xlsx"`);
+        res.setHeader('Content-Disposition', `attachment; filename="Financeiro_${projeto || 'Obra'}.xlsx"`);
         
         await workbook.xlsx.write(res);
         res.end();
     } catch (err) {
-        console.error("Erro na exportação via MongoDB:", err);
+        console.error("❌ ERRO NA ROTA DE EXPORTAÇÃO:", err.message);
         res.status(500).json({ erro: err.message });
     }
 });
@@ -274,7 +292,7 @@ app.post('/api/financeiro/exportar', async (req, res) => {
 // --- ROTAS DE DOCUMENTOS ---
 app.post('/api/documentos', upload.single('file'), async (req, res) => {
     try {
-        if (!req.file) throw new Error("Nenhum arquivo enviado.");
+        if (!req.file) throw new Error("Nenhum ficheiro enviado.");
         const { nome, area, ext, tamanho, data, tipo } = req.body;
         const arquivoBase64 = req.file.buffer.toString('base64'); 
         
@@ -376,4 +394,4 @@ app.post('/api/login', (req, res) => {
 
 // 3. Inicialização do Servidor
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Servidor L2P rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor L2P a rodar na porta ${PORT}`));
