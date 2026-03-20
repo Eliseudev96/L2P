@@ -10,6 +10,7 @@ const msal = require('@azure/msal-node');
 const { Client } = require('@microsoft/microsoft-graph-client');
 require('isomorphic-fetch');
 const multer = require('multer');
+const ExcelJS = require('exceljs'); // Nova biblioteca para preencher a planilha molde
 
 const app = express();
 app.use(cors({ origin: '*' })); 
@@ -148,29 +149,24 @@ async function sincronizarPlanilha() {
 async function lancarHorasResidentes() {
     console.log("🔄 Iniciando o salvamento automático de Residentes...");
     try {
-        // Pega a data de HOJE ajustada para o fuso horário do Brasil
         const objData = new Date();
         const tzOffset = objData.getTimezoneOffset() * 60000;
         const hoje = new Date(objData.getTime() - tzOffset);
         const dataStr = hoje.toISOString().split('T')[0];
 
-        // Pula sábados (6) e domingos (0)
         const diaSemana = hoje.getUTCDay();
         if (diaSemana === 0 || diaSemana === 6) {
             console.log("⏸️ Fim de semana: Lançamento de residentes pausado hoje.");
             return;
         }
 
-        // Acha todo mundo que é residente na equipe
         const residentes = await Funcionario.find({ isResidente: true });
         if (residentes.length === 0) return;
 
-        // Busca a apropriação de HOJE no banco
         let apropriacaoHoje = await Apropriacao.findOne({ data: dataStr });
         let dados_dia = apropriacaoHoje ? apropriacaoHoje.dados_dia : {};
         let teveMudanca = false;
 
-        // Preenche as 9h no banco só para quem ainda não tem horas lançadas hoje
         residentes.forEach(func => {
             if (!dados_dia[func.mat] && func.projetoResidente) {
                 dados_dia[func.mat] = { h1: 9, p1: func.projetoResidente };
@@ -178,7 +174,6 @@ async function lancarHorasResidentes() {
             }
         });
 
-        // Se o robô preencheu alguém, ele salva no banco de dados oficial!
         if (teveMudanca) {
             await Apropriacao.findOneAndUpdate(
                 { data: dataStr },
@@ -197,13 +192,84 @@ async function lancarHorasResidentes() {
 // ⏰ O DESPERTADOR: Roda automaticamente todo dia às 02:00 da manhã
 cron.schedule('0 2 * * *', async () => {
     await sincronizarPlanilha();
-    await lancarHorasResidentes(); // O robô agora salva as horas sozinho de madrugada
+    await lancarHorasResidentes(); 
 });
 
 
 // ==========================================
 // --- ROTAS DA API ---
 // ==========================================
+
+// --- ROTA INTELIGENTE: EXPORTAR PLANILHA FINANCEIRA DO BANCO ---
+app.post('/api/financeiro/exportar', async (req, res) => {
+    try {
+        const { projeto, cabecalho, linhas } = req.body;
+        
+        // 1. Procura a planilha exata na aba de Documentos
+        const templateDoc = await Documento.findOne({ nome: 'CONTROLE_FINANCEIRO_PROJETO.xlsx' });
+        
+        if (!templateDoc) {
+            return res.status(404).json({ 
+                erro: "Molde não encontrado! Vá na aba 'Documentos' e faça o upload do arquivo com o nome exato: CONTROLE_FINANCEIRO_PROJETO.xlsx" 
+            });
+        }
+
+        // 2. Converte o Base64 de volta para Arquivo na memória
+        const buffer = Buffer.from(templateDoc.arquivoBase64, 'base64');
+
+        // 3. Abre o arquivo original preservando cores, fórmulas e estilos
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(buffer);
+        const worksheet = workbook.getWorksheet(1);
+
+        // 4. Injeta o Cabeçalho Financeiro
+        worksheet.getCell('D3').value = cabecalho.empresa || 'CLIMATE';
+        worksheet.getCell('D4').value = projeto;
+        worksheet.getCell('C5').value = cabecalho.inicio ? cabecalho.inicio.split('-').reverse().join('/') : '';
+        worksheet.getCell('E5').value = cabecalho.centroCusto;
+        worksheet.getCell('C6').value = cabecalho.fim ? cabecalho.fim.split('-').reverse().join('/') : '';
+        worksheet.getCell('E6').value = parseFloat(cabecalho.saldoBruto || 0);
+        worksheet.getCell('C7').value = parseFloat(cabecalho.rateioCC || 0);
+        worksheet.getCell('E7').value = parseFloat(cabecalho.saldoLiquido || 0);
+        
+        worksheet.getCell('E9').value = parseFloat(cabecalho.valorAntecipado || 0);
+        
+        worksheet.getCell('C10').value = parseFloat(cabecalho.receitaPrevista || 0);
+        worksheet.getCell('E10').value = parseFloat(cabecalho.receitaReal || 0);
+        worksheet.getCell('C11').value = parseFloat(cabecalho.impostoPrevisto || 0);
+        worksheet.getCell('E11').value = parseFloat(cabecalho.impostoReal || 0);
+        worksheet.getCell('C12').value = parseFloat(cabecalho.margemPrevista || 0);
+        worksheet.getCell('E12').value = parseFloat(cabecalho.margemReal || 0);
+        worksheet.getCell('C13').value = parseFloat(cabecalho.materialPrevisto || 0);
+        worksheet.getCell('E13').value = parseFloat(cabecalho.materialReal || 0);
+        worksheet.getCell('C14').value = parseFloat(cabecalho.servicoPrevisto || 0);
+        worksheet.getCell('E14').value = parseFloat(cabecalho.servicoReal || 0);
+        worksheet.getCell('C15').value = parseFloat(cabecalho.custoFinanPrevisto || 0);
+        worksheet.getCell('E15').value = parseFloat(cabecalho.custoFinanReal || 0);
+
+        // 5. Injeta os Lançamentos do Extrato (começando na linha 17)
+        let row = 17;
+        linhas.forEach(l => {
+            worksheet.getCell(`B${row}`).value = l.data ? l.data.split('-').reverse().join('/') : '';
+            worksheet.getCell(`C${row}`).value = l.tipo;
+            worksheet.getCell(`D${row}`).value = l.desc;
+            worksheet.getCell(`E${row}`).value = parseFloat(l.valorBruto || 0);
+            worksheet.getCell(`F${row}`).value = parseFloat(l.valorLiquido || 0);
+            row++;
+        });
+
+        // 6. Devolve o Excel pronto e impecável para o Front-end baixar
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="Financeiro_${projeto}.xlsx"`);
+        
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error("Erro na exportação via MongoDB:", err);
+        res.status(500).json({ erro: err.message });
+    }
+});
+
 
 // --- ROTAS DE DOCUMENTOS ---
 app.post('/api/documentos', upload.single('file'), async (req, res) => {
