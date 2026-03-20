@@ -10,7 +10,6 @@ const msal = require('@azure/msal-node');
 const { Client } = require('@microsoft/microsoft-graph-client');
 require('isomorphic-fetch');
 const multer = require('multer');
-const ExcelJS = require('exceljs'); 
 
 const app = express();
 app.use(cors({ origin: '*' })); 
@@ -78,6 +77,7 @@ async function semearBanco() {
         ];
         await Funcionario.insertMany(iniciais);
         await Projeto.insertMany([{codigo:'230304'}, {codigo:'242236'}, {codigo:'C522006'}, {codigo:'ATESTADO'}]);
+        console.log('✅ Dados iniciais semeados no banco de dados!');
     }
 }
 
@@ -134,6 +134,7 @@ async function sincronizarPlanilha() {
                 obrasAtualizadas++;
             }
         }
+        console.log(`✅ Sincronização concluída! ${obrasAtualizadas} ativas | ${obrasRemovidas} inativas removidas.`);
         return { sucesso: true, obrasAtualizadas, obrasRemovidas };
     } catch (error) {
         console.error("❌ Erro ao ler Excel no 365:", error.message);
@@ -145,22 +146,31 @@ async function sincronizarPlanilha() {
 // 👷 AUTOMATIZADOR DE RESIDENTES
 // ==========================================
 async function lancarHorasResidentes() {
+    console.log("🔄 Iniciando o salvamento automático de Residentes...");
     try {
+        // Pega a data de HOJE ajustada para o fuso horário do Brasil
         const objData = new Date();
         const tzOffset = objData.getTimezoneOffset() * 60000;
         const hoje = new Date(objData.getTime() - tzOffset);
         const dataStr = hoje.toISOString().split('T')[0];
 
+        // Pula sábados (6) e domingos (0)
         const diaSemana = hoje.getUTCDay();
-        if (diaSemana === 0 || diaSemana === 6) return;
+        if (diaSemana === 0 || diaSemana === 6) {
+            console.log("⏸️ Fim de semana: Lançamento de residentes pausado hoje.");
+            return;
+        }
 
+        // Acha todo mundo que é residente na equipe
         const residentes = await Funcionario.find({ isResidente: true });
         if (residentes.length === 0) return;
 
+        // Busca a apropriação de HOJE no banco
         let apropriacaoHoje = await Apropriacao.findOne({ data: dataStr });
         let dados_dia = apropriacaoHoje ? apropriacaoHoje.dados_dia : {};
         let teveMudanca = false;
 
+        // Preenche as 9h no banco só para quem ainda não tem horas lançadas hoje
         residentes.forEach(func => {
             if (!dados_dia[func.mat] && func.projetoResidente) {
                 dados_dia[func.mat] = { h1: 9, p1: func.projetoResidente };
@@ -168,76 +178,32 @@ async function lancarHorasResidentes() {
             }
         });
 
+        // Se o robô preencheu alguém, ele salva no banco de dados oficial!
         if (teveMudanca) {
-            await Apropriacao.findOneAndUpdate({ data: dataStr }, { dados_dia: dados_dia }, { upsert: true });
+            await Apropriacao.findOneAndUpdate(
+                { data: dataStr },
+                { dados_dia: dados_dia },
+                { upsert: true }
+            );
+            console.log(`✅ Horas salvas automaticamente no banco para ${residentes.length} residentes!`);
+        } else {
+            console.log(`✅ Todos os residentes já estavam com as horas salvas hoje.`);
         }
     } catch (error) {
         console.error("❌ Erro ao lançar residentes:", error.message);
     }
 }
 
+// ⏰ O DESPERTADOR: Roda automaticamente todo dia às 02:00 da manhã
 cron.schedule('0 2 * * *', async () => {
     await sincronizarPlanilha();
-    await lancarHorasResidentes(); 
+    await lancarHorasResidentes(); // O robô agora salva as horas sozinho de madrugada
 });
 
 
 // ==========================================
 // --- ROTAS DA API ---
 // ==========================================
-
-// 🔥 ROTA CIRÚRGICA: DOWNLOAD DIRETO DO EXCEL COM PRESERVAÇÃO DE FORMATO
-app.post('/api/financeiro/gerar-direto', async (req, res) => {
-    try {
-        const { projeto, custoMaoDeObra, inicio, fim } = req.body;
-
-        const templateDoc = await Documento.findOne({ nome: 'CONTROLE_FINANCEIRO_PROJETO.xlsx' });
-        if (!templateDoc) {
-            return res.status(404).json({ erro: "Molde não encontrado na aba Documentos!" });
-        }
-
-        const buffer = Buffer.from(templateDoc.arquivoBase64, 'base64');
-        const workbook = new ExcelJS.Workbook();
-        
-        try {
-            await workbook.xlsx.load(buffer);
-        } catch (errExcel) {
-            throw new Error("O arquivo salvo nos Documentos não é um Excel válido (.xlsx). Se for .csv, salve novamente pelo Excel.");
-        }
-
-        // Pega a aba original
-        const worksheet = workbook.getWorksheet('Planilha1 (2)') || workbook.worksheets[0];
-        if (!worksheet) throw new Error("Aba não encontrada no Excel.");
-
-        // INJEÇÃO CIRÚRGICA: Toca apenas nestas células para não quebrar a formatação!
-        worksheet.getCell('D4').value = projeto; // Projeto
-        worksheet.getCell('D5').value = projeto; // Centro de Custo
-        
-        if (inicio) worksheet.getCell('C5').value = inicio.split('-').reverse().join('/'); // Data Início
-        if (fim) worksheet.getCell('C6').value = fim.split('-').reverse().join('/');       // Data Fim
-        
-        // SERVIÇO PREVISTO (C14) E SERVIÇO REAL (E14)
-        worksheet.getCell('C14').value = parseFloat(custoMaoDeObra) || 0; 
-        worksheet.getCell('E14').value = parseFloat(custoMaoDeObra) || 0; 
-
-        // Extrato na linha 17 (Primeira linha de dados)
-        worksheet.getCell('B17').value = new Date().toLocaleDateString('pt-BR');
-        worksheet.getCell('C17').value = 'Saida';
-        worksheet.getCell('D17').value = 'Mão de Obra L2P (Apontamentos)';
-        worksheet.getCell('E17').value = parseFloat(custoMaoDeObra) || 0;
-        worksheet.getCell('F17').value = parseFloat(custoMaoDeObra) || 0;
-
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename="Financeiro_${projeto}.xlsx"`);
-        
-        await workbook.xlsx.write(res);
-        res.end();
-    } catch (err) {
-        console.error("❌ ERRO AO GERAR EXCEL DIRETO:", err.message);
-        res.status(500).json({ erro: err.message });
-    }
-});
-
 
 // --- ROTAS DE DOCUMENTOS ---
 app.post('/api/documentos', upload.single('file'), async (req, res) => {
@@ -344,4 +310,4 @@ app.post('/api/login', (req, res) => {
 
 // 3. Inicialização do Servidor
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Servidor L2P a rodar na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor L2P rodando na porta ${PORT}`));
