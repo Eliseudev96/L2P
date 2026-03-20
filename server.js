@@ -229,11 +229,15 @@ app.post('/api/financeiro/exportar', async (req, res) => {
         try {
             await workbook.xlsx.load(buffer);
         } catch (errExcel) {
-            throw new Error("O ficheiro guardado nos Documentos não é um Excel válido (.xlsx). Pode estar corrompido ou ser um ficheiro .csv renomeado.");
+            throw new Error("O ficheiro guardado nos Documentos não é um Excel válido (.xlsx). Pode estar a usar um ficheiro .csv que foi renomeado.");
         }
 
-        const worksheet = workbook.getWorksheet(1);
-        if (!worksheet) throw new Error("Não foi possível encontrar o separador 1 da folha de cálculo.");
+        // 🔥 CORREÇÃO: Procura exatamente pelo nome do separador 'Planilha1 (2)' ou pega o primeiro disponível!
+        const worksheet = workbook.getWorksheet('Planilha1 (2)') || workbook.worksheets[0];
+        
+        if (!worksheet) {
+            throw new Error("Não foi possível encontrar nenhum separador no ficheiro Excel.");
+        }
 
         // 4. Injeta os Cabeçalhos garantindo que são números onde apropriado
         console.log("✍️ A preencher o cabeçalho...");
