@@ -4,6 +4,7 @@
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "isomorphic-fetch": "^3.0.0",
     "mongoose": "^9.3.1",
