@@ -186,7 +186,7 @@ cron.schedule('0 2 * * *', async () => {
 // --- ROTAS DA API ---
 // ==========================================
 
-// 🔥 ROTA NOVA: DOWNLOAD DIRETO DO EXCEL PREENCHIDO
+// 🔥 ROTA: DOWNLOAD DIRETO DO EXCEL PREENCHIDO
 app.post('/api/financeiro/gerar-direto', async (req, res) => {
     try {
         const { projeto, custoMaoDeObra, inicio, fim } = req.body;
@@ -215,8 +215,9 @@ app.post('/api/financeiro/gerar-direto', async (req, res) => {
         if (inicio) worksheet.getCell('C5').value = inicio.split('-').reverse().join('/'); // Data Início
         if (fim) worksheet.getCell('C6').value = fim.split('-').reverse().join('/');       // Data Fim
         
-        // Injeta o Custo consolidado de mão de obra (Serviço Real)
-        worksheet.getCell('E14').value = parseFloat(custoMaoDeObra) || 0;
+        // 🔥 AQUI ESTÁ A CORREÇÃO: Preenche tanto o SERVIÇO PREVISTO (C14) como o SERVIÇO REAL (E14)
+        worksheet.getCell('C14').value = parseFloat(custoMaoDeObra) || 0; // Serviço Previsto
+        worksheet.getCell('E14').value = parseFloat(custoMaoDeObra) || 0; // Serviço Real
 
         // Adiciona a linha de Extrato na linha 17 (Primeira linha de dados)
         worksheet.getCell('B17').value = new Date().toLocaleDateString('pt-BR');
