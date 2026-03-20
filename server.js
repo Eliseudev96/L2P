@@ -193,7 +193,7 @@ app.post('/api/financeiro/gerar-direto', async (req, res) => {
 
         const templateDoc = await Documento.findOne({ nome: 'CONTROLE_FINANCEIRO_PROJETO.xlsx' });
         if (!templateDoc) {
-            return res.status(404).json({ erro: "Molde não encontrado na aba Documentos!" });
+            return res.status(404).json({ erro: "Molde não encontrado na aba Documentos! Nomeie o ficheiro como CONTROLE_FINANCEIRO_PROJETO.xlsx" });
         }
 
         const buffer = Buffer.from(templateDoc.arquivoBase64, 'base64');
@@ -202,20 +202,20 @@ app.post('/api/financeiro/gerar-direto', async (req, res) => {
         try {
             await workbook.xlsx.load(buffer);
         } catch (errExcel) {
-            throw new Error("O arquivo salvo nos Documentos não é um Excel válido (.xlsx).");
+            throw new Error("O arquivo salvo nos Documentos não é um Excel válido (.xlsx). Se for .csv, guarde como Pasta de Trabalho no Excel.");
         }
 
-        // Pega a aba original
+        // Pega a aba original "Planilha1 (2)" ou a primeira que encontrar
         const worksheet = workbook.getWorksheet('Planilha1 (2)') || workbook.worksheets[0];
         if (!worksheet) throw new Error("Aba não encontrada no Excel.");
 
-        // Injeta apenas os dados essenciais na planilha original
-        worksheet.getCell('C4').value = projeto; // Projeto
-        worksheet.getCell('D4').value = projeto; // Previne se estiver mesclada
+        // Injeta os dados essenciais na planilha original
+        worksheet.getCell('C4').value = projeto; // Projeto (coluna C)
+        worksheet.getCell('D4').value = projeto; // Previne se as células estiverem unidas (mescladas)
         if (inicio) worksheet.getCell('C5').value = inicio.split('-').reverse().join('/'); // Data Início
         if (fim) worksheet.getCell('C6').value = fim.split('-').reverse().join('/');       // Data Fim
         
-        // 🔥 AQUI ESTÁ A CORREÇÃO: Preenche tanto o SERVIÇO PREVISTO (C14) como o SERVIÇO REAL (E14)
+        // Preenche o Custo da Mão de Obra 
         worksheet.getCell('C14').value = parseFloat(custoMaoDeObra) || 0; // Serviço Previsto
         worksheet.getCell('E14').value = parseFloat(custoMaoDeObra) || 0; // Serviço Real
 
@@ -226,6 +226,7 @@ app.post('/api/financeiro/gerar-direto', async (req, res) => {
         worksheet.getCell('E17').value = parseFloat(custoMaoDeObra) || 0;
         worksheet.getCell('F17').value = parseFloat(custoMaoDeObra) || 0;
 
+        // Escreve o ficheiro final na resposta HTTP
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename="Financeiro_${projeto}.xlsx"`);
         
