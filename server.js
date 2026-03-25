@@ -706,7 +706,18 @@ app.delete('/api/estoque/:id', async (req, res) => {
 
 });
 
-
+// PONTE SEGURA PARA O GOOGLE APPS SCRIPT (Evita erros de CORS)
+app.get('/api/google-proxy', async (req, res) => {
+    try {
+        const fetch = require('isomorphic-fetch');
+        const url = req.query.url;
+        const response = await fetch(url);
+        const data = await response.json();
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({ erro: err.message });
+    }
+});
 
 // 3. Inicialização do Servidor
 
