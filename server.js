@@ -308,6 +308,51 @@ app.post('/api/login', (req, res) => {
     else res.status(401).json({ erro: 'Usuário ou senha incorretos' });
 });
 
+// --- NOVO MODELO: ESTOQUE L2P ---
+const ItemEstoque = mongoose.model('Estoque', new mongoose.Schema({
+    codigo: String,
+    descricao: String,
+    unidade: { type: String, default: 'Un' },
+    quantidade: { type: Number, default: 0 },
+    estoqueMinimo: { type: Number, default: 0 },
+    categoria: String,
+    ultimaAtualizacao: String
+}));
+
+// --- ROTAS DE ESTOQUE ---
+app.get('/api/estoque', async (req, res) => {
+    try {
+        const itens = await ItemEstoque.find().sort({ descricao: 1 });
+        res.json(itens);
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.post('/api/estoque', async (req, res) => {
+    try {
+        const dados = req.body;
+        dados.ultimaAtualizacao = new Date().toLocaleString('pt-BR');
+        const item = new ItemEstoque(dados);
+        await item.save();
+        res.json({ sucesso: true });
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.put('/api/estoque/:id', async (req, res) => {
+    try {
+        const dados = req.body;
+        dados.ultimaAtualizacao = new Date().toLocaleString('pt-BR');
+        await ItemEstoque.findByIdAndUpdate(req.params.id, dados);
+        res.json({ sucesso: true });
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.delete('/api/estoque/:id', async (req, res) => {
+    try {
+        await ItemEstoque.findByIdAndDelete(req.params.id);
+        res.json({ sucesso: true });
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
 // 3. Inicialização do Servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Servidor L2P rodando na porta ${PORT}`));
