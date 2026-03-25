@@ -10,6 +10,7 @@ const msal = require('@azure/msal-node');
 const { Client } = require('@microsoft/microsoft-graph-client');
 require('isomorphic-fetch');
 const multer = require('multer');
+const ExcelJS = require('exceljs'); // 🔥 IMPORTAÇÃO ADICIONADA AQUI
 
 const app = express();
 app.use(cors({ origin: '*' })); 
@@ -204,6 +205,61 @@ cron.schedule('0 2 * * *', async () => {
 // ==========================================
 // --- ROTAS DA API ---
 // ==========================================
+
+// 🔥 NOVA ROTA ADICIONADA: GERA O EXCEL COM CUSTO DA OBRA E FAZ DOWNLOAD
+app.post('/api/financeiro/gerar-direto', async (req, res) => {
+    try {
+        const { projeto, custoMaoDeObra, inicio, fim } = req.body;
+
+        // Procura a planilha molde original salva na aba Documentos
+        const templateDoc = await Documento.findOne({ nome: 'CONTROLE_FINANCEIRO_PROJETO.xlsx' });
+        if (!templateDoc) {
+            return res.status(404).json({ erro: "Molde não encontrado! Certifique-se de que fez o upload do arquivo 'CONTROLE_FINANCEIRO_PROJETO.xlsx' na aba de Documentos." });
+        }
+
+        const buffer = Buffer.from(templateDoc.arquivoBase64, 'base64');
+        const workbook = new ExcelJS.Workbook();
+        
+        try {
+            await workbook.xlsx.load(buffer);
+        } catch (errExcel) {
+            throw new Error("O arquivo salvo nos Documentos não é um Excel válido (.xlsx). Se for .csv, salve novamente pelo Excel.");
+        }
+
+        // Pega a aba original
+        const worksheet = workbook.getWorksheet('Planilha1 (2)') || workbook.worksheets[0];
+        if (!worksheet) throw new Error("Aba não encontrada no Excel.");
+
+        // INJEÇÃO CIRÚRGICA: Preenche as células sem quebrar a formatação
+        worksheet.getCell('D4').value = projeto; // Projeto
+        worksheet.getCell('D5').value = projeto; // Centro de Custo
+        
+        if (inicio) worksheet.getCell('C5').value = inicio.split('-').reverse().join('/'); // Data Início
+        if (fim) worksheet.getCell('C6').value = fim.split('-').reverse().join('/');       // Data Fim
+        
+        // SERVIÇO PREVISTO (C14) E SERVIÇO REAL (E14)
+        const valorCusto = parseFloat(custoMaoDeObra) || 0;
+        worksheet.getCell('C14').value = valorCusto; 
+        worksheet.getCell('E14').value = valorCusto; 
+
+        // Cria o extrato de saída na linha 17
+        worksheet.getCell('B17').value = new Date().toLocaleDateString('pt-BR');
+        worksheet.getCell('C17').value = 'Saida';
+        worksheet.getCell('D17').value = 'Mão de Obra L2P (Apontamentos)';
+        worksheet.getCell('E17').value = valorCusto;
+        worksheet.getCell('F17').value = valorCusto;
+
+        // Prepara o arquivo para ser baixado
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="Financeiro_${projeto}.xlsx"`);
+        
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error("❌ ERRO AO GERAR EXCEL DIRETO:", err.message);
+        res.status(500).json({ erro: err.message });
+    }
+});
 
 // --- ROTAS DE DOCUMENTOS ---
 app.post('/api/documentos', upload.single('file'), async (req, res) => {
