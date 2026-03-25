@@ -216,7 +216,7 @@ cron.schedule('0 2 * * *', async () => {
 // --- ROTAS DA API ---
 // ==========================================
 
-// 🔥 ROTA NOVA: BAIXA DO GOOGLE E SALVA DIRETO NO MÓDULO "DOCUMENTOS"
+// 🔥 ROTA CORRIGIDA E À PROVA DE BALAS: BAIXA DO GOOGLE E SALVA NOS DOCUMENTOS
 app.post('/api/financeiro/salvar-documento', async (req, res) => {
     try {
         const { sheetId, projeto } = req.body;
@@ -228,13 +228,26 @@ app.post('/api/financeiro/salvar-documento', async (req, res) => {
         const fetch = require('isomorphic-fetch');
         const response = await fetch(exportUrl);
         
-        if (!response.ok) throw new Error("O Google bloqueou o download. Verifique se a planilha está pública.");
+        if (!response.ok) {
+            throw new Error(`O Google bloqueou o download. Status: ${response.status}`);
+        }
+
+        // VERIFICAÇÃO DE SEGURANÇA: O Google mandou a tela de Login em vez do Excel?
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('text/html')) {
+            throw new Error("Acesso negado pelo Google. O robô não conseguiu deixar a planilha pública. Verifique as permissões do Apps Script.");
+        }
         
-        // Transforma o arquivo baixado no formato que o seu banco aceita (Base64)
-        const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
+        // EXTRAÇÃO SEGURA: Compatível com qualquer versão do Node.js no Render
+        let buffer;
+        if (typeof response.buffer === 'function') {
+            buffer = await response.buffer(); // Para versões antigas
+        } else {
+            const arrayBuffer = await response.arrayBuffer(); // Para versões modernas
+            buffer = Buffer.from(arrayBuffer);
+        }
+        
         const arquivoBase64 = buffer.toString('base64');
-        
         const dataAtual = new Date().toISOString().split('T')[0];
         const tamanhoKB = (buffer.length / 1024).toFixed(2) + ' KB';
         const nomeArquivo = `Financeiro_Obra_${projeto}_${dataAtual}`;
