@@ -99,8 +99,16 @@ const Auditoria = mongoose.model('Auditoria', new mongoose.Schema({
     data: String, usuario: String, acao: String, ip: String
 }));
 
+// 🔔 NOVO: MODELO DE ALERTAS (CAIXA DE ENTRADA DO SINO)
+const Alerta = mongoose.model('Alerta', new mongoose.Schema({ 
+    data: String, 
+    texto: String, 
+    tipo: String, 
+    lido: { type: Boolean, default: false } 
+}));
+
 // ==========================================
-// 🕵️‍♂️ FUNÇÃO DE AUDITORIA (O CÃO DE GUARDA)
+// 🕵️‍♂️ FUNÇÃO DE AUDITORIA E ALERTAS
 // ==========================================
 async function registrarLog(req, acao, nomeForcado = null) {
     try {
@@ -417,6 +425,17 @@ app.post('/api/documentos', upload.single('file'), async (req, res) => {
         
         await registrarLog(req, `Fez upload do documento: ${nome} na área ${area}`);
         
+        // 🔔 GATILHO DE NOTIFICAÇÃO: DOCUMENTO NOVO
+        const configAlertas = await Notificacao.findOne();
+        if (configAlertas && configAlertas.docNovo) {
+            const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+            await Alerta.create({ 
+                data: dataHora, 
+                texto: `Novo documento anexado na área ${area}: ${nome}`, 
+                tipo: 'sucesso' 
+            });
+        }
+        
         const docResumo = { ...novoDoc._doc }; delete docResumo.arquivoBase64; 
         res.json({ sucesso: true, doc: docResumo });
     } catch (err) { res.status(500).json({ erro: err.message }); }
@@ -479,6 +498,35 @@ app.post('/api/apropriacao', async (req, res) => {
     try {
         await Apropriacao.findOneAndUpdate({ data: req.body.data }, { dados_dia: req.body.dados_dia }, { upsert: true });
         await registrarLog(req, `Salvou apropriacao de horas referente ao dia ${req.body.data}`);
+        
+        // 🔔 GATILHO DE NOTIFICAÇÃO: HORA EXTRA (> 10h)
+        const configAlertas = await Notificacao.findOne();
+        if (configAlertas && configAlertas.horaExtra) {
+            const dados = req.body.dados_dia;
+            for (const mat in dados) {
+                const totalH = (parseFloat(dados[mat].h1) || 0) + (parseFloat(dados[mat].h2) || 0) + (parseFloat(dados[mat].h3) || 0);
+                if (totalH > 10) {
+                    const func = await Funcionario.findOne({ mat });
+                    const nomeFunc = func ? func.nome : `Matrícula ${mat}`;
+                    const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+                    
+                    // Verifica se já avisou desse colaborador nesse dia (Evita gerar 10 alertas pro mesmo cara se o cara apertar "salvar" 10 vezes)
+                    const alertaExistente = await Alerta.findOne({ 
+                        texto: { $regex: new RegExp(`excedeu 10h no dia ${req.body.data}`) },
+                        texto: { $regex: new RegExp(nomeFunc) }
+                    });
+                    
+                    if (!alertaExistente) {
+                        await Alerta.create({ 
+                            data: dataHora, 
+                            texto: `Atenção: ${nomeFunc} excedeu 10h no dia ${req.body.data} (${totalH}h totais)`, 
+                            tipo: 'alerta' 
+                        });
+                    }
+                }
+            }
+        }
+        
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
@@ -536,6 +584,23 @@ app.delete('/api/estoque/:id', async (req, res) => {
         await registrarLog(req, `Excluiu o item ${item?.descricao} do Estoque`);
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// --- 🔔 ROTAS DE ALERTAS PARA O FRONTEND (SINO) ---
+app.get('/api/alertas', async (req, res) => {
+    try { 
+        // Retorna os últimos 30 alertas criados no sistema
+        res.json(await Alerta.find().sort({ _id: -1 }).limit(30)); 
+    } 
+    catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.post('/api/alertas/marcar-lidos', async (req, res) => {
+    try { 
+        await Alerta.updateMany({ lido: false }, { $set: { lido: true } }); 
+        res.json({ sucesso: true }); 
+    } 
+    catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // 3. Inicialização do Servidor
