@@ -99,6 +99,26 @@ const Auditoria = mongoose.model('Auditoria', new mongoose.Schema({
     data: String, usuario: String, acao: String, ip: String
 }));
 
+// ==========================================
+// 🕵️‍♂️ FUNÇÃO DE AUDITORIA (O CÃO DE GUARDA)
+// ==========================================
+async function registrarLog(req, acao, nomeForcado = null) {
+    try {
+        // Pega o IP de quem fez a requisição (se vier do Render, usa o cabeçalho x-forwarded-for)
+        const ip = (req.headers && req.headers['x-forwarded-for']) || (req.socket && req.socket.remoteAddress) || 'IP Desconhecido';
+        
+        // Pega a data e hora exata do Brasil
+        const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        
+        // Descobre quem foi (via header enviado pelo frontend ou nome forçado)
+        const usuarioLogado = nomeForcado || (req.headers && req.headers['x-usuario']) || 'Usuário Não Identificado';
+        
+        await Auditoria.create({ data: dataHora, usuario: usuarioLogado, acao: acao, ip: ip });
+    } catch (e) {
+        console.error("⚠️ Falha ao registrar log de auditoria:", e.message);
+    }
+}
+
 // --- FUNÇÃO DE SEMENTE (DATABASE SEED) ---
 async function semearBanco() {
     const fCount = await Funcionario.countDocuments();
@@ -166,6 +186,10 @@ async function sincronizarPlanilha() {
                 obrasAtualizadas++;
             }
         }
+        
+        // Log da automação
+        await registrarLog({ headers: {}, socket: { remoteAddress: 'Servidor' } }, "Sincronização de obras com MS365 concluída.", "Robô da Madrugada");
+        
         console.log(`✅ Sincronização concluída! ${obrasAtualizadas} ativas | ${obrasRemovidas} inativas removidas.`);
         return { sucesso: true, obrasAtualizadas, obrasRemovidas };
     } catch (error) {
@@ -211,6 +235,10 @@ async function lancarHorasResidentes() {
                 { dados_dia: dados_dia },
                 { upsert: true }
             );
+            
+            // Log da automação
+            await registrarLog({ headers: {}, socket: { remoteAddress: 'Servidor' } }, `Lançou 9h automáticas para ${residentes.length} residentes.`, "Robô da Madrugada");
+            
             console.log(`✅ Horas salvas automaticamente no banco para ${residentes.length} residentes!`);
         } else {
             console.log(`✅ Todos os residentes já estavam com as horas salvas hoje.`);
@@ -231,18 +259,38 @@ cron.schedule('0 2 * * *', async () => {
 // --- ROTAS DA API ---
 // ==========================================
 
-// --- ROTAS DE USUÁRIOS E SEGURANÇA ---
-app.get('/api/usuarios', async (req, res) => {
+// --- ROTA DE LOGIN REAL ---
+app.post('/api/login', async (req, res) => {
+    const { usuario, senha } = req.body;
     try {
-        const users = await Usuario.find().select('-senha'); 
-        res.json(users);
+        const userDb = await Usuario.findOne({ email: usuario, senha: senha, status: 'Ativo' });
+        
+        if (userDb) {
+            await registrarLog(req, 'Entrou no sistema', userDb.nome);
+            return res.json({ tipo: userDb.nivel, nome: userDb.nome });
+        }
+        
+        if (usuario === 'gerencia' && senha === 'L2pgerencia2026!') {
+            await registrarLog(req, 'Acessou o sistema via Chave Mestra', 'Gerência');
+            return res.json({ tipo: 'Admin', nome: 'Gerência' });
+        }
+        
+        await registrarLog(req, `Tentativa falha de login (E-mail: ${usuario})`, 'Desconhecido');
+        res.status(401).json({ erro: 'Usuário ou senha incorretos' });
     } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// --- ROTAS DE SEGURANÇA E CONFIGURAÇÕES ---
+app.get('/api/usuarios', async (req, res) => {
+    try { res.json(await Usuario.find().select('-senha')); } 
+    catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.post('/api/usuarios', async (req, res) => {
     try {
         const novoUser = new Usuario(req.body);
         await novoUser.save();
+        await registrarLog(req, `Criou novo utilizador: ${novoUser.nome}`);
         res.json(novoUser);
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
@@ -251,20 +299,21 @@ app.put('/api/usuarios/:id', async (req, res) => {
     try {
         const updateData = { ...req.body };
         if (!updateData.senha) delete updateData.senha; 
-        
         await Usuario.findByIdAndUpdate(req.params.id, updateData);
+        await registrarLog(req, `Editou o perfil do utilizador: ${updateData.nome}`);
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.delete('/api/usuarios/:id', async (req, res) => {
     try {
+        const user = await Usuario.findById(req.params.id);
         await Usuario.findByIdAndDelete(req.params.id);
+        await registrarLog(req, `Excluiu o utilizador: ${user?.nome}`);
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-// --- ROTAS DA EMPRESA ---
 app.get('/api/empresa', async (req, res) => {
     let emp = await Empresa.findOne();
     if (!emp) emp = await Empresa.create({ razaoSocial: '', cnpj: '', inscricao: '', endereco: '' });
@@ -275,10 +324,10 @@ app.put('/api/empresa', async (req, res) => {
     let emp = await Empresa.findOne();
     if (emp) { Object.assign(emp, req.body); await emp.save(); } 
     else { emp = await Empresa.create(req.body); }
+    await registrarLog(req, `Alterou os dados oficiais da Empresa`);
     res.json(emp);
 });
 
-// --- ROTAS DE NOTIFICAÇÕES ---
 app.get('/api/notificacoes', async (req, res) => {
     let notif = await Notificacao.findOne();
     if (!notif) notif = await Notificacao.create({ docNovo: false, horaExtra: false, relatorioFin: false });
@@ -289,55 +338,29 @@ app.put('/api/notificacoes', async (req, res) => {
     let notif = await Notificacao.findOne();
     if (notif) { Object.assign(notif, req.body); await notif.save(); } 
     else { notif = await Notificacao.create(req.body); }
+    await registrarLog(req, `Alterou as regras de Notificação`);
     res.json(notif);
 });
 
-// --- ROTA DE AUDITORIA ---
 app.get('/api/auditoria', async (req, res) => {
     try {
-        const logs = await Auditoria.find().sort({ _id: -1 }).limit(50);
+        const logs = await Auditoria.find().sort({ _id: -1 }).limit(100);
         res.json(logs);
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-// --- ROTA DE LOGIN (Atualizada) ---
-app.post('/api/login', async (req, res) => {
-    const { usuario, senha } = req.body;
-    
-    try {
-        // Verifica no banco de dados primeiro
-        const userDb = await Usuario.findOne({ email: usuario, senha: senha, status: 'Ativo' });
-        
-        if (userDb) {
-            return res.json({ tipo: userDb.nivel, nome: userDb.nome });
-        }
-        
-        // Fallback para login de admin mestre hardcoded caso precisem entrar
-        if (usuario === 'gerencia' && senha === 'L2pgerencia2026!') {
-            return res.json({ tipo: 'Admin', nome: 'Gerência' });
-        }
-        
-        res.status(401).json({ erro: 'Usuário ou senha incorretos, ou cadastro inativo.' });
-    } catch (err) {
-        res.status(500).json({ erro: err.message });
-    }
-});
 
-
-// 🔥 ROTA DE DOCUMENTOS FINANCEIROS (GOOGLE DRIVE)
+// --- ROTAS DO GOOGLE E PLANILHAS ---
 app.post('/api/financeiro/salvar-documento', async (req, res) => {
     try {
         const { sheetId, projeto } = req.body;
         if (!sheetId || !projeto) throw new Error("Faltam dados da planilha.");
 
         const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx`;
-        
         const fetch = require('isomorphic-fetch');
         const response = await fetch(exportUrl);
         
-        if (!response.ok) {
-            throw new Error(`O Google bloqueou o download. Status: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`O Google bloqueou o download. Status: ${response.status}`);
 
         const contentType = response.headers.get('content-type');
         if (contentType && contentType.includes('text/html')) {
@@ -345,12 +368,8 @@ app.post('/api/financeiro/salvar-documento', async (req, res) => {
         }
         
         let buffer;
-        if (typeof response.buffer === 'function') {
-            buffer = await response.buffer(); 
-        } else {
-            const arrayBuffer = await response.arrayBuffer(); 
-            buffer = Buffer.from(arrayBuffer);
-        }
+        if (typeof response.buffer === 'function') buffer = await response.buffer(); 
+        else { const arrayBuffer = await response.arrayBuffer(); buffer = Buffer.from(arrayBuffer); }
         
         const arquivoBase64 = buffer.toString('base64');
         const dataAtual = new Date().toISOString().split('T')[0];
@@ -358,16 +377,12 @@ app.post('/api/financeiro/salvar-documento', async (req, res) => {
         const nomeArquivo = `Financeiro_Obra_${projeto}_${dataAtual}`;
 
         const novoDoc = new Documento({
-            nome: nomeArquivo,
-            area: 'Financeiro',
-            tipo: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            ext: 'xlsx',
-            tamanho: tamanhoKB,
-            data: dataAtual,
-            arquivoBase64: arquivoBase64
+            nome: nomeArquivo, area: 'Financeiro', tipo: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ext: 'xlsx', tamanho: tamanhoKB, data: dataAtual, arquivoBase64: arquivoBase64
         });
 
         await novoDoc.save();
+        await registrarLog(req, `Extraiu PC Financeiro da Obra ${projeto}`);
         res.json({ sucesso: true });
     } catch (err) {
         console.error("❌ Erro ao salvar documento:", err.message);
@@ -375,25 +390,19 @@ app.post('/api/financeiro/salvar-documento', async (req, res) => {
     }
 });
 
-// PONTE SEGURA PARA O GOOGLE APPS SCRIPT
 app.get('/api/google-proxy', async (req, res) => {
     try {
         const fetch = require('isomorphic-fetch');
         const url = req.query.url;
         const response = await fetch(url);
-        
         const text = await response.text(); 
-        
         try {
             const data = JSON.parse(text);
             res.json(data);
         } catch (e) {
-            console.error("❌ Google devolveu HTML (Bloqueio de Permissão):", text.substring(0, 200));
             res.status(500).json({ erro: "Bloqueio de segurança do Google." });
         }
-    } catch (err) {
-        res.status(500).json({ erro: err.message });
-    }
+    } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // --- ROTAS DE DOCUMENTOS ---
@@ -406,65 +415,62 @@ app.post('/api/documentos', upload.single('file'), async (req, res) => {
         const novoDoc = new Documento({ nome, area, ext, tamanho, data, tipo, arquivoBase64 });
         await novoDoc.save();
         
-        const docResumo = { ...novoDoc._doc };
-        delete docResumo.arquivoBase64; 
+        await registrarLog(req, `Fez upload do documento: ${nome} na área ${area}`);
         
+        const docResumo = { ...novoDoc._doc }; delete docResumo.arquivoBase64; 
         res.json({ sucesso: true, doc: docResumo });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.get('/api/documentos', async (req, res) => {
-    try {
-        const docs = await Documento.find().select('-arquivoBase64').sort({ _id: -1 });
-        res.json(docs);
-    } catch (err) { res.status(500).json({ erro: err.message }); }
+    try { res.json(await Documento.find().select('-arquivoBase64').sort({ _id: -1 })); } 
+    catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.get('/api/documentos/:id/download', async (req, res) => {
     try {
         const doc = await Documento.findById(req.params.id);
+        await registrarLog(req, `Fez download do documento: ${doc.nome}`);
         res.json({ arquivoBase64: doc.arquivoBase64, tipo: doc.tipo, nome: doc.nome });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.delete('/api/documentos/:id', async (req, res) => {
     try {
+        const doc = await Documento.findById(req.params.id);
         await Documento.findByIdAndDelete(req.params.id);
+        await registrarLog(req, `Excluiu o documento: ${doc?.nome}`);
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-// --- ROTAS DE PROJETOS E SINCRONIZAÇÃO ---
+// --- ROTAS DE PROJETOS ---
 app.get('/api/projetos/force-sync', async (req, res) => {
     try {
         const resultado = await sincronizarPlanilha();
+        await registrarLog(req, `Forçou a sincronização de obras com o M365 manualmente`);
         res.json(resultado);
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.get('/api/projetos', async (req, res) => {
-    const p = await Projeto.find().sort({ codigo: 1 });
-    res.json(p.map(x => x.codigo));
+    const p = await Projeto.find().sort({ codigo: 1 }); res.json(p.map(x => x.codigo));
 });
 
 app.post('/api/projetos', async (req, res) => { 
-    try {
-        await new Projeto({codigo: req.body.codigo}).save(); 
-        res.json({sucesso:true}); 
-    } catch (err) { res.status(500).json({ erro: err.message }); }
+    try { await new Projeto({codigo: req.body.codigo}).save(); res.json({sucesso:true}); } 
+    catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.delete('/api/projetos/:cod', async (req, res) => { 
-    await Projeto.deleteOne({ codigo: req.params.cod }); 
-    res.json({sucesso:true}); 
+    await Projeto.deleteOne({ codigo: req.params.cod }); res.json({sucesso:true}); 
 });
 
 // --- ROTAS DE APROPRIAÇÃO ---
 app.get('/api/apropriacao', async (req, res) => {
     try {
         const todos = await Apropriacao.find();
-        let banco = {};
-        todos.forEach(reg => { banco[reg.data] = reg.dados_dia; });
+        let banco = {}; todos.forEach(reg => { banco[reg.data] = reg.dados_dia; });
         res.json(banco);
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
@@ -472,6 +478,7 @@ app.get('/api/apropriacao', async (req, res) => {
 app.post('/api/apropriacao', async (req, res) => {
     try {
         await Apropriacao.findOneAndUpdate({ data: req.body.data }, { dados_dia: req.body.dados_dia }, { upsert: true });
+        await registrarLog(req, `Salvou apropriacao de horas referente ao dia ${req.body.data}`);
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
@@ -482,12 +489,14 @@ app.get('/api/equipe', async (req, res) => res.json(await Funcionario.find().sor
 app.post('/api/equipe', async (req, res) => { 
     try {
         await Funcionario.findOneAndUpdate({ mat: req.body.mat }, req.body, { upsert: true }); 
+        await registrarLog(req, `Adicionou/Editou o funcionário na Tabela de Custos: ${req.body.nome}`);
         res.json({sucesso:true}); 
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.delete('/api/equipe/:mat', async (req, res) => { 
     await Funcionario.deleteOne({ mat: req.params.mat }); 
+    await registrarLog(req, `Excluiu um funcionário da Tabela de Custos (Matrícula: ${req.params.mat})`);
     res.json({sucesso:true}); 
 });
 
@@ -505,6 +514,7 @@ app.post('/api/estoque', async (req, res) => {
         dados.ultimaAtualizacao = new Date().toLocaleString('pt-BR');
         const item = new ItemEstoque(dados);
         await item.save();
+        await registrarLog(req, `Cadastrou o item ${dados.descricao} no Estoque`);
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
@@ -514,13 +524,16 @@ app.put('/api/estoque/:id', async (req, res) => {
         const dados = req.body;
         dados.ultimaAtualizacao = new Date().toLocaleString('pt-BR');
         await ItemEstoque.findByIdAndUpdate(req.params.id, dados);
+        await registrarLog(req, `Atualizou as informações de um item no Estoque`);
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.delete('/api/estoque/:id', async (req, res) => {
     try {
+        const item = await ItemEstoque.findById(req.params.id);
         await ItemEstoque.findByIdAndDelete(req.params.id);
+        await registrarLog(req, `Excluiu o item ${item?.descricao} do Estoque`);
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
