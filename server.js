@@ -77,6 +77,27 @@ const ItemEstoque = mongoose.model('Estoque', new mongoose.Schema({
     ultimaAtualizacao: String
 }));
 
+// --- MODELOS DE SEGURANÇA E CONFIGURAÇÕES ---
+const Usuario = mongoose.model('Usuario', new mongoose.Schema({
+    nome: String,
+    email: String,
+    cargo: String,
+    nivel: String,
+    status: String,
+    senha: String // Em produção futura, aplicar hash (bcrypt)
+}));
+
+const Empresa = mongoose.model('Empresa', new mongoose.Schema({
+    razaoSocial: String, cnpj: String, inscricao: String, endereco: String
+}));
+
+const Notificacao = mongoose.model('Notificacao', new mongoose.Schema({
+    docNovo: Boolean, horaExtra: Boolean, relatorioFin: Boolean
+}));
+
+const Auditoria = mongoose.model('Auditoria', new mongoose.Schema({
+    data: String, usuario: String, acao: String, ip: String
+}));
 
 // --- FUNÇÃO DE SEMENTE (DATABASE SEED) ---
 async function semearBanco() {
@@ -159,29 +180,24 @@ async function sincronizarPlanilha() {
 async function lancarHorasResidentes() {
     console.log("🔄 Iniciando o salvamento automático de Residentes...");
     try {
-        // Pega a data de HOJE ajustada para o fuso horário do Brasil
         const objData = new Date();
         const tzOffset = objData.getTimezoneOffset() * 60000;
         const hoje = new Date(objData.getTime() - tzOffset);
         const dataStr = hoje.toISOString().split('T')[0];
 
-        // Pula sábados (6) e domingos (0)
         const diaSemana = hoje.getUTCDay();
         if (diaSemana === 0 || diaSemana === 6) {
             console.log("⏸️ Fim de semana: Lançamento de residentes pausado hoje.");
             return;
         }
 
-        // Acha todo mundo que é residente na equipe
         const residentes = await Funcionario.find({ isResidente: true });
         if (residentes.length === 0) return;
 
-        // Busca a apropriação de HOJE no banco
         let apropriacaoHoje = await Apropriacao.findOne({ data: dataStr });
         let dados_dia = apropriacaoHoje ? apropriacaoHoje.dados_dia : {};
         let teveMudanca = false;
 
-        // Preenche as 9h no banco só para quem ainda não tem horas lançadas hoje
         residentes.forEach(func => {
             if (!dados_dia[func.mat] && func.projetoResidente) {
                 dados_dia[func.mat] = { h1: 9, p1: func.projetoResidente };
@@ -189,7 +205,6 @@ async function lancarHorasResidentes() {
             }
         });
 
-        // Se o robô preencheu alguém, ele salva no banco de dados oficial!
         if (teveMudanca) {
             await Apropriacao.findOneAndUpdate(
                 { data: dataStr },
@@ -208,7 +223,7 @@ async function lancarHorasResidentes() {
 // ⏰ O DESPERTADOR: Roda automaticamente todo dia às 02:00 da manhã
 cron.schedule('0 2 * * *', async () => {
     await sincronizarPlanilha();
-    await lancarHorasResidentes(); // O robô agora salva as horas sozinho de madrugada
+    await lancarHorasResidentes(); 
 });
 
 
@@ -216,13 +231,105 @@ cron.schedule('0 2 * * *', async () => {
 // --- ROTAS DA API ---
 // ==========================================
 
-// 🔥 ROTA CORRIGIDA E À PROVA DE BALAS: BAIXA DO GOOGLE E SALVA NOS DOCUMENTOS
+// --- ROTAS DE USUÁRIOS E SEGURANÇA ---
+app.get('/api/usuarios', async (req, res) => {
+    try {
+        const users = await Usuario.find().select('-senha'); 
+        res.json(users);
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.post('/api/usuarios', async (req, res) => {
+    try {
+        const novoUser = new Usuario(req.body);
+        await novoUser.save();
+        res.json(novoUser);
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.put('/api/usuarios/:id', async (req, res) => {
+    try {
+        const updateData = { ...req.body };
+        if (!updateData.senha) delete updateData.senha; 
+        
+        await Usuario.findByIdAndUpdate(req.params.id, updateData);
+        res.json({ sucesso: true });
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.delete('/api/usuarios/:id', async (req, res) => {
+    try {
+        await Usuario.findByIdAndDelete(req.params.id);
+        res.json({ sucesso: true });
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// --- ROTAS DA EMPRESA ---
+app.get('/api/empresa', async (req, res) => {
+    let emp = await Empresa.findOne();
+    if (!emp) emp = await Empresa.create({ razaoSocial: '', cnpj: '', inscricao: '', endereco: '' });
+    res.json(emp);
+});
+
+app.put('/api/empresa', async (req, res) => {
+    let emp = await Empresa.findOne();
+    if (emp) { Object.assign(emp, req.body); await emp.save(); } 
+    else { emp = await Empresa.create(req.body); }
+    res.json(emp);
+});
+
+// --- ROTAS DE NOTIFICAÇÕES ---
+app.get('/api/notificacoes', async (req, res) => {
+    let notif = await Notificacao.findOne();
+    if (!notif) notif = await Notificacao.create({ docNovo: false, horaExtra: false, relatorioFin: false });
+    res.json(notif);
+});
+
+app.put('/api/notificacoes', async (req, res) => {
+    let notif = await Notificacao.findOne();
+    if (notif) { Object.assign(notif, req.body); await notif.save(); } 
+    else { notif = await Notificacao.create(req.body); }
+    res.json(notif);
+});
+
+// --- ROTA DE AUDITORIA ---
+app.get('/api/auditoria', async (req, res) => {
+    try {
+        const logs = await Auditoria.find().sort({ _id: -1 }).limit(50);
+        res.json(logs);
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// --- ROTA DE LOGIN (Atualizada) ---
+app.post('/api/login', async (req, res) => {
+    const { usuario, senha } = req.body;
+    
+    try {
+        // Verifica no banco de dados primeiro
+        const userDb = await Usuario.findOne({ email: usuario, senha: senha, status: 'Ativo' });
+        
+        if (userDb) {
+            return res.json({ tipo: userDb.nivel, nome: userDb.nome });
+        }
+        
+        // Fallback para login de admin mestre hardcoded caso precisem entrar
+        if (usuario === 'gerencia' && senha === 'L2pgerencia2026!') {
+            return res.json({ tipo: 'Admin', nome: 'Gerência' });
+        }
+        
+        res.status(401).json({ erro: 'Usuário ou senha incorretos, ou cadastro inativo.' });
+    } catch (err) {
+        res.status(500).json({ erro: err.message });
+    }
+});
+
+
+// 🔥 ROTA DE DOCUMENTOS FINANCEIROS (GOOGLE DRIVE)
 app.post('/api/financeiro/salvar-documento', async (req, res) => {
     try {
         const { sheetId, projeto } = req.body;
         if (!sheetId || !projeto) throw new Error("Faltam dados da planilha.");
 
-        // O link mágico da Google que força o download em Excel
         const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx`;
         
         const fetch = require('isomorphic-fetch');
@@ -232,18 +339,16 @@ app.post('/api/financeiro/salvar-documento', async (req, res) => {
             throw new Error(`O Google bloqueou o download. Status: ${response.status}`);
         }
 
-        // VERIFICAÇÃO DE SEGURANÇA: O Google mandou a tela de Login em vez do Excel?
         const contentType = response.headers.get('content-type');
         if (contentType && contentType.includes('text/html')) {
-            throw new Error("Acesso negado pelo Google. O robô não conseguiu deixar a planilha pública. Verifique as permissões do Apps Script.");
+            throw new Error("Acesso negado pelo Google. Verifique as permissões do Apps Script.");
         }
         
-        // EXTRAÇÃO SEGURA: Compatível com qualquer versão do Node.js no Render
         let buffer;
         if (typeof response.buffer === 'function') {
-            buffer = await response.buffer(); // Para versões antigas
+            buffer = await response.buffer(); 
         } else {
-            const arrayBuffer = await response.arrayBuffer(); // Para versões modernas
+            const arrayBuffer = await response.arrayBuffer(); 
             buffer = Buffer.from(arrayBuffer);
         }
         
@@ -252,7 +357,6 @@ app.post('/api/financeiro/salvar-documento', async (req, res) => {
         const tamanhoKB = (buffer.length / 1024).toFixed(2) + ' KB';
         const nomeArquivo = `Financeiro_Obra_${projeto}_${dataAtual}`;
 
-        // Salva na coleção "Documentos" do seu banco de dados
         const novoDoc = new Documento({
             nome: nomeArquivo,
             area: 'Financeiro',
@@ -271,14 +375,13 @@ app.post('/api/financeiro/salvar-documento', async (req, res) => {
     }
 });
 
-// PONTE SEGURA PARA O GOOGLE APPS SCRIPT (Evita erros de CORS)
+// PONTE SEGURA PARA O GOOGLE APPS SCRIPT
 app.get('/api/google-proxy', async (req, res) => {
     try {
         const fetch = require('isomorphic-fetch');
         const url = req.query.url;
         const response = await fetch(url);
         
-        // Lê como texto para não crashar se o Google devolver página de erro (HTML)
         const text = await response.text(); 
         
         try {
@@ -386,14 +489,6 @@ app.post('/api/equipe', async (req, res) => {
 app.delete('/api/equipe/:mat', async (req, res) => { 
     await Funcionario.deleteOne({ mat: req.params.mat }); 
     res.json({sucesso:true}); 
-});
-
-// --- ROTA DE LOGIN ---
-app.post('/api/login', (req, res) => {
-    const { usuario, senha } = req.body;
-    if (usuario === 'gerencia' && senha === 'L2pgerencia2026!') res.json({ tipo: 'admin', nome: 'Gerência' });
-    else if (usuario === 'analista' && senha === 'L2panalista2026') res.json({ tipo: 'user', nome: 'Analista L2P' });
-    else res.status(401).json({ erro: 'Usuário ou senha incorretos' });
 });
 
 // --- ROTAS DE ESTOQUE ---
