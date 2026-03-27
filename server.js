@@ -121,8 +121,13 @@ const Evento = mongoose.model('Evento', new mongoose.Schema({
 // ==========================================
 async function registrarLog(req, acao, nomeForcado = null) {
     try {
+        // Pega o IP de quem fez a requisição (se vier do Render, usa o cabeçalho x-forwarded-for)
         const ip = (req.headers && req.headers['x-forwarded-for']) || (req.socket && req.socket.remoteAddress) || 'IP Desconhecido';
+        
+        // Pega a data e hora exata do Brasil
         const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        
+        // Descobre quem foi (via header enviado pelo frontend ou nome forçado)
         const usuarioLogado = nomeForcado || (req.headers && req.headers['x-usuario']) || 'Usuário Não Identificado';
         
         await Auditoria.create({ data: dataHora, usuario: usuarioLogado, acao: acao, ip: ip });
@@ -514,7 +519,6 @@ app.post('/api/apropriacao', async (req, res) => {
                     const nomeFunc = func ? func.nome : `Matrícula ${mat}`;
                     const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
                     
-                    // Verifica se já avisou desse colaborador nesse dia
                     const alertaExistente = await Alerta.findOne({ 
                         texto: { $regex: new RegExp(`excedeu 10h no dia ${req.body.data}`) },
                         texto: { $regex: new RegExp(nomeFunc) }
@@ -614,7 +618,7 @@ app.delete('/api/alertas', async (req, res) => {
     catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-// --- 📅 ROTAS DA AGENDA COMPARTILHADA ---
+// --- 📅 ROTAS DA AGENDA COMPARTILHADA (COM GATILHO PARA O SINO) ---
 app.get('/api/eventos', async (req, res) => {
     try {
         const eventos = await Evento.find().sort({ dataInicio: 1 });
@@ -626,7 +630,20 @@ app.post('/api/eventos', async (req, res) => {
     try {
         const novoEvento = new Evento(req.body);
         await novoEvento.save();
+        
+        const usuarioLogado = req.headers['x-usuario'] || 'Usuário Desconhecido';
         await registrarLog(req, `Agendou compromisso: ${novoEvento.titulo}`);
+
+        // 🔔 SE NÃO FOR A GERÊNCIA, MANDA ALERTA NO SINO
+        if (usuarioLogado !== 'Gerência' && usuarioLogado !== 'Gerência L2P') {
+            const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+            await Alerta.create({
+                data: dataHora,
+                texto: `${usuarioLogado} agendou: ${novoEvento.titulo} (${novoEvento.dataInicio})`,
+                tipo: 'alerta'
+            });
+        }
+
         res.json({ sucesso: true, evento: novoEvento });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
@@ -643,7 +660,20 @@ app.delete('/api/eventos/:id', async (req, res) => {
     try {
         const evento = await Evento.findById(req.params.id);
         await Evento.findByIdAndDelete(req.params.id);
+        
+        const usuarioLogado = req.headers['x-usuario'] || 'Usuário Desconhecido';
         await registrarLog(req, `Cancelou evento da agenda: ${evento?.titulo}`);
+
+        // 🔔 SE NÃO FOR A GERÊNCIA, MANDA ALERTA DE CANCELAMENTO NO SINO
+        if (usuarioLogado !== 'Gerência' && usuarioLogado !== 'Gerência L2P' && evento) {
+            const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+            await Alerta.create({
+                data: dataHora,
+                texto: `${usuarioLogado} CANCELOU o evento: ${evento.titulo}`,
+                tipo: 'urgente'
+            });
+        }
+
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
