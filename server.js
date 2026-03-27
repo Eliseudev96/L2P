@@ -603,6 +603,15 @@ app.post('/api/alertas/marcar-lidos', async (req, res) => {
     catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
+// 🗑️ ROTA PARA LIMPAR TODOS OS ALERTAS
+app.delete('/api/alertas', async (req, res) => {
+    try { 
+        await Alerta.deleteMany({}); 
+        res.json({ sucesso: true }); 
+    } 
+    catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
 // 3. Inicialização do Servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Servidor L2P rodando na porta ${PORT}`));
