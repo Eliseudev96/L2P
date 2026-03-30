@@ -109,9 +109,9 @@ const Alerta = mongoose.model('Alerta', new mongoose.Schema({
 // 📅 MODELO DA AGENDA COMPARTILHADA
 const Evento = mongoose.model('Evento', new mongoose.Schema({
     titulo: String,
-    dataInicio: String,
-    horaInicio: String, // <--- ADICIONADO
-    horaFim: String,// formato YYYY-MM-DD ou ISO
+    dataInicio: String, // formato YYYY-MM-DD ou ISO
+    horaInicio: String, // <--- HORÁRIOS ADICIONADOS AQUI!
+    horaFim: String,
     dataFim: String,
     tipo: String,       // ex: 'reuniao', 'manutencao', 'obra', etc
     descricao: String,
@@ -729,6 +729,31 @@ app.post('/api/planilhas/inserir', async (req, res) => {
 
     } catch (err) {
         console.error("❌ Erro ao inserir:", err.message);
+        res.status(500).json({ erro: err.message });
+    }
+});
+
+// 📥 5. BAIXAR PLANILHA CRUA (Para o Dashboard Automático) <-- ADICIONADO AQUI!
+app.get('/api/planilhas/download', async (req, res) => {
+    try {
+        const { q } = req.query; // ex: 'RH'
+        const client = await getGraphClient();
+        const { driveId } = await getDriveComercial(client);
+        
+        const searchResult = await client.api(`/drives/${driveId}/root/search(q='${q}')`).get();
+        // Acha o arquivo que termina com .xlsx e tem a palavra procurada no nome
+        const file = searchResult.value.find(f => f.name.toLowerCase().includes(q.toLowerCase()) && f.name.endsWith('.xlsx'));
+        
+        if (!file) {
+            return res.status(404).json({ erro: `Planilha contendo o nome "${q}" não encontrada no SharePoint.` });
+        }
+        
+        // Pega o link secreto de download temporário da Microsoft
+        const downloadUrl = file['@microsoft.graph.downloadUrl'];
+        res.json({ url: downloadUrl });
+
+    } catch (err) {
+        console.error("❌ Erro ao gerar link de download:", err.message);
         res.status(500).json({ erro: err.message });
     }
 });
