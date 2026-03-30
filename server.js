@@ -616,7 +616,7 @@ app.delete('/api/eventos/:id', async (req, res) => {
 // 💰 INTEGRAÇÃO NATIVA: LER E SALVAR NO ONEDRIVE (MICROSOFT 365)
 // ==========================================
 
-// 1. LER DADOS DIRETAMENTE DA PLANILHA NO ONEDRIVE (TRAVADO EM teste123)
+// 1. LER DADOS DIRETAMENTE DA PLANILHA NO ONEDRIVE (TRAVADO EM teste123 PARA TESTES)
 app.get('/api/financeiro/:projeto', async (req, res) => {
     try {
         const client = await getGraphClient();
@@ -625,9 +625,8 @@ app.get('/api/financeiro/:projeto', async (req, res) => {
         
         const shareToken = encodeShareUrl(process.env.PLANILHA_URL);
         const baseItem = await client.api(`/shares/${shareToken}/driveItem`).get();
-        
         const driveId = baseItem.parentReference.driveId;
-        const folderId = baseItem.parentReference.id; // <-- Voltamos a focar na pasta certa!
+        const folderId = baseItem.parentReference.id;
 
         try {
             // Busca apenas dentro da pasta onde fica sua planilha principal
@@ -635,6 +634,7 @@ app.get('/api/financeiro/:projeto', async (req, res) => {
             const file = searchResult.value.find(f => f.name.toLowerCase() === `teste123.xlsx`);
 
             if (!file) {
+                console.log(`Planilha não encontrada no OneDrive: teste123.xlsx`);
                 return res.json([]); 
             }
 
@@ -664,7 +664,7 @@ app.get('/api/financeiro/:projeto', async (req, res) => {
     }
 });
 
-// 2. INSERIR NOVA LINHA NA PLANILHA NO ONEDRIVE (TRAVADO EM teste123)
+// 2. INSERIR NOVA LINHA DIRETAMENTE NA PLANILHA NO ONEDRIVE (TRAVADO EM teste123 PARA TESTES)
 app.post('/api/financeiro/inserir-excel', async (req, res) => {
     try {
         const { projeto, data, tipo, categoria, descricao, valor } = req.body;
@@ -674,9 +674,8 @@ app.post('/api/financeiro/inserir-excel', async (req, res) => {
         
         const shareToken = encodeShareUrl(process.env.PLANILHA_URL);
         const baseItem = await client.api(`/shares/${shareToken}/driveItem`).get();
-        
         const driveId = baseItem.parentReference.driveId;
-        const folderId = baseItem.parentReference.id; // <-- Voltamos a focar na pasta certa!
+        const folderId = baseItem.parentReference.id;
 
         const searchResult = await client.api(`/drives/${driveId}/items/${folderId}/search(q='teste123.xlsx')`).get();
         const file = searchResult.value.find(f => f.name.toLowerCase() === `teste123.xlsx`);
@@ -699,8 +698,11 @@ app.post('/api/financeiro/inserir-excel', async (req, res) => {
     }
 });
 
+// Para apagar linhas é melhor fazer no arquivo do Excel mesmo.
 app.delete('/api/financeiro/:id', async (req, res) => {
     res.status(400).json({ erro: "Para excluir um lançamento, abra o Excel no seu OneDrive e apague a linha manualmente." });
 });
 
-// 3. Inicialização do Servidor (Mantenha o app.listen que já estava)
+// 3. Inicialização do Servidor
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Servidor L2P rodando na porta ${PORT}`));
