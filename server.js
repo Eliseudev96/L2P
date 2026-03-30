@@ -616,43 +616,46 @@ app.delete('/api/eventos/:id', async (req, res) => {
 // 💰 INTEGRAÇÃO NATIVA: LER E SALVAR NO SHAREPOINT (l2pengenharialtda)
 // ==========================================
 
-// Função inteligente que vasculha o SharePoint procurando o arquivo Excel
+// Função à prova de falhas para buscar o arquivo no SharePoint
 async function getSharePointFile(client, fileName) {
-    const siteId = "l2pengenharialtda.sharepoint.com:/sites/Servidor";
+    console.log(`🔍 Buscando arquivo ${fileName} no SharePoint...`);
+    
+    // 1. Busca o Site pelo endereço exato da L2P
+    const site = await client.api('/sites/l2pengenharialtda.sharepoint.com:/sites/Servidor').get();
+    console.log(`✅ Site encontrado. ID: ${site.id}`);
 
-    // 1. Pega as bibliotecas de documentos (Drives) do seu site SharePoint
-    const drives = await client.api(`/sites/${siteId}/drives`).get();
-
-    // 2. Tenta achar a biblioteca "Comercial" (que aparece na sua URL) ou usa a biblioteca padrão
-    let targetDrive = drives.value.find(d => d.webUrl && d.webUrl.includes('Comercial')) || 
-                      drives.value.find(d => d.name === 'Comercial');
-                      
+    // 2. Busca as Bibliotecas (Drives) dentro desse site
+    const drives = await client.api(`/sites/${site.id}/drives`).get();
+    
+    // 3. Procura a biblioteca "Comercial"
+    let targetDrive = drives.value.find(d => d.name === 'Comercial' || (d.webUrl && d.webUrl.includes('Comercial')));
+    
     if (!targetDrive) {
-        // Se não achou a pasta Comercial como drive isolado, usa o "Documentos" padrão
-        targetDrive = await client.api(`/sites/${siteId}/drive`).get(); 
+        console.log(`⚠️ Biblioteca Comercial não achada. Usando a padrão.`);
+        targetDrive = drives.value[0]; // Se não achar a Comercial, usa a primeira que existir
     }
+    console.log(`✅ Drive selecionado: ${targetDrive.name}`);
 
-    // 3. Procura o arquivo específico dentro dessa biblioteca
+    // 4. Procura o arquivo exato lá dentro
     const searchResult = await client.api(`/drives/${targetDrive.id}/root/search(q='${fileName}')`).get();
     const file = searchResult.value.find(f => f.name.toLowerCase() === fileName.toLowerCase());
 
     return { driveId: targetDrive.id, file: file };
 }
 
-// 1. LER DADOS DIRETAMENTE DA PLANILHA (TRAVADO EM teste123.xlsx PARA TESTES)
+// 1. LER DADOS DO EXCEL (TRAVADO EM teste123.xlsx PARA TESTES)
 app.get('/api/financeiro/:projeto', async (req, res) => {
     try {
         const client = await getGraphClient();
         
-        // Agora nós usamos a nova função direta no seu SharePoint
         const { driveId, file } = await getSharePointFile(client, 'teste123.xlsx');
 
         if (!file) {
-            console.log(`Planilha não encontrada no SharePoint: teste123.xlsx`);
+            console.log(`⚠️ Planilha teste123.xlsx não existe no SharePoint.`);
             return res.json([]); 
         }
 
-        // Lê as linhas da 'Tabela1' do Excel
+        console.log(`✅ Planilha achada! Lendo a Tabela1...`);
         const excelData = await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows`).get();
         
         const lancamentos = excelData.value.map((row, index) => {
@@ -669,28 +672,27 @@ app.get('/api/financeiro/:projeto', async (req, res) => {
         res.json(lancamentos);
 
     } catch (err) { 
-        console.error("Erro geral na leitura do Excel:", err.message);
+        console.error("❌ Erro fatal na leitura do Excel:", err.message);
+        // Agora retorna um erro limpo em vez de quebrar a tela
         res.status(500).json({ erro: err.message }); 
     }
 });
 
-// 2. INSERIR NOVA LINHA NO SHAREPOINT (TRAVADO EM teste123.xlsx PARA TESTES)
+// 2. INSERIR NOVA LINHA (TRAVADO EM teste123.xlsx PARA TESTES)
 app.post('/api/financeiro/inserir-excel', async (req, res) => {
     try {
-        const { projeto, data, tipo, categoria, descricao, valor } = req.body;
+        const { data, tipo, categoria, descricao, valor } = req.body;
         const client = await getGraphClient();
 
-        // Encontra o arquivo direto no seu SharePoint L2P
         const { driveId, file } = await getSharePointFile(client, 'teste123.xlsx');
 
         if (!file) {
             return res.status(404).json({ erro: `A planilha teste123.xlsx não foi encontrada na pasta Comercial do SharePoint.` });
         }
 
-        // Monta a linha com os dados
         const novaLinha = [[ data, tipo, categoria, descricao, valor ]];
 
-        // Escreve a linha na 'Tabela1'
+        console.log(`✅ Escrevendo dados na Tabela1...`);
         await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows/add`)
             .post({ index: null, values: novaLinha });
 
