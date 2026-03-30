@@ -613,50 +613,60 @@ app.delete('/api/eventos/:id', async (req, res) => {
 
 
 // ==========================================
-// 💰 INTEGRAÇÃO NATIVA: LER E SALVAR NO ONEDRIVE (MICROSOFT 365)
+// 💰 INTEGRAÇÃO NATIVA: LER E SALVAR NO SHAREPOINT (l2pengenharialtda)
 // ==========================================
 
-// 1. LER DADOS DIRETAMENTE DA PLANILHA NO ONEDRIVE (TRAVADO EM teste123 PARA TESTES)
+// Função inteligente que vasculha o SharePoint procurando o arquivo Excel
+async function getSharePointFile(client, fileName) {
+    const siteId = "l2pengenharialtda.sharepoint.com:/sites/Servidor";
+
+    // 1. Pega as bibliotecas de documentos (Drives) do seu site SharePoint
+    const drives = await client.api(`/sites/${siteId}/drives`).get();
+
+    // 2. Tenta achar a biblioteca "Comercial" (que aparece na sua URL) ou usa a biblioteca padrão
+    let targetDrive = drives.value.find(d => d.webUrl && d.webUrl.includes('Comercial')) || 
+                      drives.value.find(d => d.name === 'Comercial');
+                      
+    if (!targetDrive) {
+        // Se não achou a pasta Comercial como drive isolado, usa o "Documentos" padrão
+        targetDrive = await client.api(`/sites/${siteId}/drive`).get(); 
+    }
+
+    // 3. Procura o arquivo específico dentro dessa biblioteca
+    const searchResult = await client.api(`/drives/${targetDrive.id}/root/search(q='${fileName}')`).get();
+    const file = searchResult.value.find(f => f.name.toLowerCase() === fileName.toLowerCase());
+
+    return { driveId: targetDrive.id, file: file };
+}
+
+// 1. LER DADOS DIRETAMENTE DA PLANILHA (TRAVADO EM teste123.xlsx PARA TESTES)
 app.get('/api/financeiro/:projeto', async (req, res) => {
     try {
         const client = await getGraphClient();
         
-        if (!process.env.PLANILHA_URL) throw new Error("PLANILHA_URL ausente.");
-        
-        const shareToken = encodeShareUrl(process.env.PLANILHA_URL);
-        const baseItem = await client.api(`/shares/${shareToken}/driveItem`).get();
-        const driveId = baseItem.parentReference.driveId;
-        const folderId = baseItem.parentReference.id;
+        // Agora nós usamos a nova função direta no seu SharePoint
+        const { driveId, file } = await getSharePointFile(client, 'teste123.xlsx');
 
-        try {
-            // Busca apenas dentro da pasta onde fica sua planilha principal
-            const searchResult = await client.api(`/drives/${driveId}/items/${folderId}/search(q='teste123.xlsx')`).get();
-            const file = searchResult.value.find(f => f.name.toLowerCase() === `teste123.xlsx`);
-
-            if (!file) {
-                console.log(`Planilha não encontrada no OneDrive: teste123.xlsx`);
-                return res.json([]); 
-            }
-
-            const excelData = await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows`).get();
-            
-            const lancamentos = excelData.value.map((row, index) => {
-                return {
-                    _id: index.toString(), 
-                    data: row.values[0][0],
-                    tipo: row.values[0][1],
-                    categoria: row.values[0][2],
-                    descricao: row.values[0][3],
-                    valor: parseFloat(row.values[0][4]) || 0
-                };
-            }).reverse();
-
-            res.json(lancamentos);
-
-        } catch (fileError) {
-            console.error("Erro na busca da planilha:", fileError.message);
-            res.json([]); 
+        if (!file) {
+            console.log(`Planilha não encontrada no SharePoint: teste123.xlsx`);
+            return res.json([]); 
         }
+
+        // Lê as linhas da 'Tabela1' do Excel
+        const excelData = await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows`).get();
+        
+        const lancamentos = excelData.value.map((row, index) => {
+            return {
+                _id: index.toString(), 
+                data: row.values[0][0],
+                tipo: row.values[0][1],
+                categoria: row.values[0][2],
+                descricao: row.values[0][3],
+                valor: parseFloat(row.values[0][4]) || 0
+            };
+        }).reverse();
+
+        res.json(lancamentos);
 
     } catch (err) { 
         console.error("Erro geral na leitura do Excel:", err.message);
@@ -664,43 +674,37 @@ app.get('/api/financeiro/:projeto', async (req, res) => {
     }
 });
 
-// 2. INSERIR NOVA LINHA DIRETAMENTE NA PLANILHA NO ONEDRIVE (TRAVADO EM teste123 PARA TESTES)
+// 2. INSERIR NOVA LINHA NO SHAREPOINT (TRAVADO EM teste123.xlsx PARA TESTES)
 app.post('/api/financeiro/inserir-excel', async (req, res) => {
     try {
         const { projeto, data, tipo, categoria, descricao, valor } = req.body;
         const client = await getGraphClient();
 
-        if (!process.env.PLANILHA_URL) throw new Error("PLANILHA_URL ausente.");
-        
-        const shareToken = encodeShareUrl(process.env.PLANILHA_URL);
-        const baseItem = await client.api(`/shares/${shareToken}/driveItem`).get();
-        const driveId = baseItem.parentReference.driveId;
-        const folderId = baseItem.parentReference.id;
-
-        const searchResult = await client.api(`/drives/${driveId}/items/${folderId}/search(q='teste123.xlsx')`).get();
-        const file = searchResult.value.find(f => f.name.toLowerCase() === `teste123.xlsx`);
+        // Encontra o arquivo direto no seu SharePoint L2P
+        const { driveId, file } = await getSharePointFile(client, 'teste123.xlsx');
 
         if (!file) {
-            return res.status(404).json({ erro: `A planilha teste123.xlsx não foi encontrada na pasta.` });
+            return res.status(404).json({ erro: `A planilha teste123.xlsx não foi encontrada na pasta Comercial do SharePoint.` });
         }
 
+        // Monta a linha com os dados
         const novaLinha = [[ data, tipo, categoria, descricao, valor ]];
 
+        // Escreve a linha na 'Tabela1'
         await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows/add`)
             .post({ index: null, values: novaLinha });
 
-        await registrarLog(req, `Inseriu lançamento de R$ ${valor} direto na planilha do OneDrive (teste123)`);
+        await registrarLog(req, `Inseriu lançamento de R$ ${valor} direto na planilha do SharePoint (teste123)`);
         res.json({ sucesso: true, mensagem: "Adicionado com sucesso na planilha teste123!" });
 
     } catch (error) {
-        console.error("❌ Erro ao escrever no Excel:", error.message);
-        res.status(500).json({ erro: "Falha de comunicação com o OneDrive: " + error.message });
+        console.error("❌ Erro ao escrever no SharePoint:", error.message);
+        res.status(500).json({ erro: "Falha de comunicação com o SharePoint: " + error.message });
     }
 });
 
-// Para apagar linhas é melhor fazer no arquivo do Excel mesmo.
 app.delete('/api/financeiro/:id', async (req, res) => {
-    res.status(400).json({ erro: "Para excluir um lançamento, abra o Excel no seu OneDrive e apague a linha manualmente." });
+    res.status(400).json({ erro: "Para excluir um lançamento, abra o Excel no seu SharePoint e apague a linha manualmente." });
 });
 
 // 3. Inicialização do Servidor
