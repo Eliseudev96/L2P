@@ -116,6 +116,16 @@ const Evento = mongoose.model('Evento', new mongoose.Schema({
     responsavel: String
 }));
 
+// 💰 MODELO DO CONTROLE FINANCEIRO NATIVO (MONGODB)
+const LancamentoFinanceiro = mongoose.model('LancamentoFinanceiro', new mongoose.Schema({
+    projeto: String, // Código da Obra
+    data: String,    // YYYY-MM-DD
+    tipo: String,    // 'Despesa' ou 'Receita'
+    categoria: String, // 'Material', 'Alimentação', 'Terceiros', 'Faturamento', etc.
+    descricao: String,
+    valor: Number
+}));
+
 // ==========================================
 // 🕵️‍♂️ FUNÇÃO DE AUDITORIA E ALERTAS
 // ==========================================
@@ -601,32 +611,36 @@ app.delete('/api/eventos/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
+
 // ==========================================
-// 💰 INTEGRAÇÃO NATIVA: LER E SALVAR NO EXCEL (MICROSOFT 365)
+// 💰 INTEGRAÇÃO NATIVA: LER E SALVAR NO ONEDRIVE (MICROSOFT 365)
 // ==========================================
 
-// 1. LER DADOS DIRETAMENTE DA PLANILHA DO PROJETO
+// 1. LER DADOS DIRETAMENTE DA PLANILHA NO ONEDRIVE (TRAVADO EM teste123 PARA TESTES)
 app.get('/api/financeiro/:projeto', async (req, res) => {
     try {
-        const projeto = req.params.projeto;
         const client = await getGraphClient();
         
         if (!process.env.PLANILHA_URL) throw new Error("PLANILHA_URL ausente.");
         
-        // Pega a referência da pasta onde estão os arquivos
         const shareToken = encodeShareUrl(process.env.PLANILHA_URL);
         const baseItem = await client.api(`/shares/${shareToken}/driveItem`).get();
+        // ID do seu OneDrive no Graph API
         const driveId = baseItem.parentReference.driveId;
-        const folderId = baseItem.parentReference.id;
 
         try {
-            // Busca DIRETAMENTE o arquivo com o nome exato do projeto (ex: 230304.xlsx)
-            const file = await client.api(`/drives/${driveId}/items/${folderId}:/${projeto}.xlsx`).get();
+            // Varrer o OneDrive inteiro atrás do arquivo teste123.xlsx
+            const searchResult = await client.api(`/drives/${driveId}/root/search(q='teste123.xlsx')`).get();
+            const file = searchResult.value.find(f => f.name.toLowerCase() === `teste123.xlsx`);
 
-            // Lê as linhas que estão dentro da 'Tabela1' desse arquivo
+            if (!file) {
+                console.log(`Planilha não encontrada no OneDrive: teste123.xlsx`);
+                return res.json([]); 
+            }
+
+            // Lê as linhas que estão dentro da 'Tabela1' do Excel encontrado
             const excelData = await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows`).get();
             
-            // Transforma os dados pro formato que a tela precisa
             const lancamentos = excelData.value.map((row, index) => {
                 return {
                     _id: index.toString(), 
@@ -636,12 +650,12 @@ app.get('/api/financeiro/:projeto', async (req, res) => {
                     descricao: row.values[0][3],
                     valor: parseFloat(row.values[0][4]) || 0
                 };
-            }).reverse(); // Mostra do mais recente pro mais antigo
+            }).reverse();
 
             res.json(lancamentos);
+
         } catch (fileError) {
-            // Se não achar o arquivo com o nome do projeto, retorna vazio pro frontend não quebrar
-            console.log(`Planilha não encontrada para o projeto: ${projeto}.xlsx`);
+            console.error("Erro na busca da planilha:", fileError.message);
             res.json([]); 
         }
 
@@ -651,7 +665,7 @@ app.get('/api/financeiro/:projeto', async (req, res) => {
     }
 });
 
-// 2. INSERIR NOVA LINHA DIRETAMENTE NA PLANILHA DO PROJETO
+// 2. INSERIR NOVA LINHA DIRETAMENTE NA PLANILHA NO ONEDRIVE (TRAVADO EM teste123 PARA TESTES)
 app.post('/api/financeiro/inserir-excel', async (req, res) => {
     try {
         const { projeto, data, tipo, categoria, descricao, valor } = req.body;
@@ -662,34 +676,34 @@ app.post('/api/financeiro/inserir-excel', async (req, res) => {
         const shareToken = encodeShareUrl(process.env.PLANILHA_URL);
         const baseItem = await client.api(`/shares/${shareToken}/driveItem`).get();
         const driveId = baseItem.parentReference.driveId;
-        const folderId = baseItem.parentReference.id;
 
-        // Busca DIRETAMENTE o arquivo com o nome exato do projeto
-        const file = await client.api(`/drives/${driveId}/items/${folderId}:/${projeto}.xlsx`).get();
+        // Varrer o OneDrive inteiro atrás do arquivo teste123.xlsx
+        const searchResult = await client.api(`/drives/${driveId}/root/search(q='teste123.xlsx')`).get();
+        const file = searchResult.value.find(f => f.name.toLowerCase() === `teste123.xlsx`);
 
         if (!file) {
-            return res.status(404).json({ erro: `Planilha da obra ${projeto} não encontrada na nuvem.` });
+            return res.status(404).json({ erro: `A planilha teste123.xlsx não foi encontrada no OneDrive.` });
         }
 
-        // Monta a linha com os dados da tela (colunas: Data, Tipo, Categoria, Descrição, Valor)
+        // Monta a linha com os dados da tela (Colunas: Data, Tipo, Categoria, Descrição, Valor)
         const novaLinha = [[ data, tipo, categoria, descricao, valor ]];
 
-        // Escreve a linha dentro da 'Tabela1' do Excel
+        // Escreve a linha na 'Tabela1'
         await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows/add`)
             .post({ index: null, values: novaLinha });
 
-        await registrarLog(req, `Inseriu lançamento de R$ ${valor} direto na planilha Excel da obra ${projeto}`);
-        res.json({ sucesso: true, mensagem: "Adicionado com sucesso na planilha original!" });
+        await registrarLog(req, `Inseriu lançamento de R$ ${valor} direto na planilha do OneDrive (teste123)`);
+        res.json({ sucesso: true, mensagem: "Adicionado com sucesso na planilha teste123!" });
 
     } catch (error) {
         console.error("❌ Erro ao escrever no Excel:", error.message);
-        res.status(500).json({ erro: "Falha de comunicação com o Excel: " + error.message });
+        res.status(500).json({ erro: "Falha de comunicação com o OneDrive: " + error.message });
     }
 });
 
-// A exclusão de linhas específicas via Graph API é complexa, recomenda-se apagar direto no arquivo
+// Para apagar linhas é melhor fazer no arquivo do Excel mesmo.
 app.delete('/api/financeiro/:id', async (req, res) => {
-    res.status(400).json({ erro: "Para excluir um lançamento, abra o Excel original no seu OneDrive e apague a linha manualmente." });
+    res.status(400).json({ erro: "Para excluir um lançamento, abra o Excel no seu OneDrive e apague a linha manualmente." });
 });
 
 // 3. Inicialização do Servidor
