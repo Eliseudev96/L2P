@@ -106,7 +106,7 @@ const Alerta = mongoose.model('Alerta', new mongoose.Schema({
     lido: { type: Boolean, default: false } 
 }));
 
-// 📅 NOVO: MODELO DA AGENDA COMPARTILHADA
+// 📅 MODELO DA AGENDA COMPARTILHADA
 const Evento = mongoose.model('Evento', new mongoose.Schema({
     titulo: String,
     dataInicio: String, // formato YYYY-MM-DD ou ISO
@@ -116,20 +116,24 @@ const Evento = mongoose.model('Evento', new mongoose.Schema({
     responsavel: String
 }));
 
+// 💰 NOVO: MODELO DO CONTROLE FINANCEIRO NATIVO (MONGODB)
+const LancamentoFinanceiro = mongoose.model('LancamentoFinanceiro', new mongoose.Schema({
+    projeto: String, // Código da Obra
+    data: String,    // YYYY-MM-DD
+    tipo: String,    // 'Despesa' ou 'Receita'
+    categoria: String, // 'Material', 'Alimentação', 'Terceiros', 'Faturamento', etc.
+    descricao: String,
+    valor: Number
+}));
+
 // ==========================================
 // 🕵️‍♂️ FUNÇÃO DE AUDITORIA E ALERTAS
 // ==========================================
 async function registrarLog(req, acao, nomeForcado = null) {
     try {
-        // Pega o IP de quem fez a requisição (se vier do Render, usa o cabeçalho x-forwarded-for)
         const ip = (req.headers && req.headers['x-forwarded-for']) || (req.socket && req.socket.remoteAddress) || 'IP Desconhecido';
-        
-        // Pega a data e hora exata do Brasil
         const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-        
-        // Descobre quem foi (via header enviado pelo frontend ou nome forçado)
         const usuarioLogado = nomeForcado || (req.headers && req.headers['x-usuario']) || 'Usuário Não Identificado';
-        
         await Auditoria.create({ data: dataHora, usuario: usuarioLogado, acao: acao, ip: ip });
     } catch (e) {
         console.error("⚠️ Falha ao registrar log de auditoria:", e.message);
@@ -204,7 +208,6 @@ async function sincronizarPlanilha() {
             }
         }
         
-        // Log da automação
         await registrarLog({ headers: {}, socket: { remoteAddress: 'Servidor' } }, "Sincronização de obras com MS365 concluída.", "Robô da Madrugada");
         
         console.log(`✅ Sincronização concluída! ${obrasAtualizadas} ativas | ${obrasRemovidas} inativas removidas.`);
@@ -253,7 +256,6 @@ async function lancarHorasResidentes() {
                 { upsert: true }
             );
             
-            // Log da automação
             await registrarLog({ headers: {}, socket: { remoteAddress: 'Servidor' } }, `Lançou 9h automáticas para ${residentes.length} residentes.`, "Robô da Madrugada");
             
             console.log(`✅ Horas salvas automaticamente no banco para ${residentes.length} residentes!`);
@@ -265,7 +267,6 @@ async function lancarHorasResidentes() {
     }
 }
 
-// ⏰ O DESPERTADOR: Roda automaticamente todo dia às 02:00 da manhã
 cron.schedule('0 2 * * *', async () => {
     await sincronizarPlanilha();
     await lancarHorasResidentes(); 
@@ -366,62 +367,6 @@ app.get('/api/auditoria', async (req, res) => {
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-
-// --- ROTAS DO GOOGLE E PLANILHAS ---
-app.post('/api/financeiro/salvar-documento', async (req, res) => {
-    try {
-        const { sheetId, projeto } = req.body;
-        if (!sheetId || !projeto) throw new Error("Faltam dados da planilha.");
-
-        const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx`;
-        const fetch = require('isomorphic-fetch');
-        const response = await fetch(exportUrl);
-        
-        if (!response.ok) throw new Error(`O Google bloqueou o download. Status: ${response.status}`);
-
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('text/html')) {
-            throw new Error("Acesso negado pelo Google. Verifique as permissões do Apps Script.");
-        }
-        
-        let buffer;
-        if (typeof response.buffer === 'function') buffer = await response.buffer(); 
-        else { const arrayBuffer = await response.arrayBuffer(); buffer = Buffer.from(arrayBuffer); }
-        
-        const arquivoBase64 = buffer.toString('base64');
-        const dataAtual = new Date().toISOString().split('T')[0];
-        const tamanhoKB = (buffer.length / 1024).toFixed(2) + ' KB';
-        const nomeArquivo = `Financeiro_Obra_${projeto}_${dataAtual}`;
-
-        const novoDoc = new Documento({
-            nome: nomeArquivo, area: 'Financeiro', tipo: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            ext: 'xlsx', tamanho: tamanhoKB, data: dataAtual, arquivoBase64: arquivoBase64
-        });
-
-        await novoDoc.save();
-        await registrarLog(req, `Extraiu PC Financeiro da Obra ${projeto}`);
-        res.json({ sucesso: true });
-    } catch (err) {
-        console.error("❌ Erro ao salvar documento:", err.message);
-        res.status(500).json({ erro: err.message });
-    }
-});
-
-app.get('/api/google-proxy', async (req, res) => {
-    try {
-        const fetch = require('isomorphic-fetch');
-        const url = req.query.url;
-        const response = await fetch(url);
-        const text = await response.text(); 
-        try {
-            const data = JSON.parse(text);
-            res.json(data);
-        } catch (e) {
-            res.status(500).json({ erro: "Bloqueio de segurança do Google." });
-        }
-    } catch (err) { res.status(500).json({ erro: err.message }); }
-});
-
 // --- ROTAS DE DOCUMENTOS ---
 app.post('/api/documentos', upload.single('file'), async (req, res) => {
     try {
@@ -434,7 +379,6 @@ app.post('/api/documentos', upload.single('file'), async (req, res) => {
         
         await registrarLog(req, `Fez upload do documento: ${nome} na área ${area}`);
         
-        // 🔔 GATILHO DE NOTIFICAÇÃO: DOCUMENTO NOVO
         const configAlertas = await Notificacao.findOne();
         if (configAlertas && configAlertas.docNovo) {
             const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -508,7 +452,6 @@ app.post('/api/apropriacao', async (req, res) => {
         await Apropriacao.findOneAndUpdate({ data: req.body.data }, { dados_dia: req.body.dados_dia }, { upsert: true });
         await registrarLog(req, `Salvou apropriacao de horas referente ao dia ${req.body.data}`);
         
-        // 🔔 GATILHO DE NOTIFICAÇÃO: HORA EXTRA (> 10h)
         const configAlertas = await Notificacao.findOne();
         if (configAlertas && configAlertas.horaExtra) {
             const dados = req.body.dados_dia;
@@ -594,31 +537,23 @@ app.delete('/api/estoque/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-// --- 🔔 ROTAS DE ALERTAS PARA O FRONTEND (SINO) ---
+// --- ROTAS DE ALERTAS PARA O FRONTEND ---
 app.get('/api/alertas', async (req, res) => {
-    try { 
-        res.json(await Alerta.find().sort({ _id: -1 }).limit(30)); 
-    } 
+    try { res.json(await Alerta.find().sort({ _id: -1 }).limit(30)); } 
     catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.post('/api/alertas/marcar-lidos', async (req, res) => {
-    try { 
-        await Alerta.updateMany({ lido: false }, { $set: { lido: true } }); 
-        res.json({ sucesso: true }); 
-    } 
+    try { await Alerta.updateMany({ lido: false }, { $set: { lido: true } }); res.json({ sucesso: true }); } 
     catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 app.delete('/api/alertas', async (req, res) => {
-    try { 
-        await Alerta.deleteMany({}); 
-        res.json({ sucesso: true }); 
-    } 
+    try { await Alerta.deleteMany({}); res.json({ sucesso: true }); } 
     catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-// --- 📅 ROTAS DA AGENDA COMPARTILHADA (COM GATILHO PARA O SINO) ---
+// --- ROTAS DA AGENDA COMPARTILHADA ---
 app.get('/api/eventos', async (req, res) => {
     try {
         const eventos = await Evento.find().sort({ dataInicio: 1 });
@@ -634,7 +569,6 @@ app.post('/api/eventos', async (req, res) => {
         const usuarioLogado = req.headers['x-usuario'] || 'Usuário Desconhecido';
         await registrarLog(req, `Agendou compromisso: ${novoEvento.titulo}`);
 
-        // 🔔 SE NÃO FOR A GERÊNCIA, MANDA ALERTA NO SINO
         if (usuarioLogado !== 'Gerência' && usuarioLogado !== 'Gerência L2P') {
             const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             await Alerta.create({
@@ -664,7 +598,6 @@ app.delete('/api/eventos/:id', async (req, res) => {
         const usuarioLogado = req.headers['x-usuario'] || 'Usuário Desconhecido';
         await registrarLog(req, `Cancelou evento da agenda: ${evento?.titulo}`);
 
-        // 🔔 SE NÃO FOR A GERÊNCIA, MANDA ALERTA DE CANCELAMENTO NO SINO
         if (usuarioLogado !== 'Gerência' && usuarioLogado !== 'Gerência L2P' && evento) {
             const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             await Alerta.create({
@@ -674,6 +607,33 @@ app.delete('/api/eventos/:id', async (req, res) => {
             });
         }
 
+        res.json({ sucesso: true });
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// ==========================================
+// 💰 ROTAS DO CONTROLE FINANCEIRO NATIVO 
+// ==========================================
+app.get('/api/financeiro/:projeto', async (req, res) => {
+    try {
+        const lancamentos = await LancamentoFinanceiro.find({ projeto: req.params.projeto }).sort({ data: -1 });
+        res.json(lancamentos);
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.post('/api/financeiro', async (req, res) => {
+    try {
+        const novo = new LancamentoFinanceiro(req.body);
+        await novo.save();
+        await registrarLog(req, `Registrou um lançamento de R$ ${novo.valor} na obra ${novo.projeto}`);
+        res.json({ sucesso: true, lancamento: novo });
+    } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.delete('/api/financeiro/:id', async (req, res) => {
+    try {
+        const lanc = await LancamentoFinanceiro.findByIdAndDelete(req.params.id);
+        await registrarLog(req, `Excluiu um lançamento financeiro da obra ${lanc?.projeto}`);
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
