@@ -116,16 +116,6 @@ const Evento = mongoose.model('Evento', new mongoose.Schema({
     responsavel: String
 }));
 
-// 💰 NOVO: MODELO DO CONTROLE FINANCEIRO NATIVO (MONGODB)
-const LancamentoFinanceiro = mongoose.model('LancamentoFinanceiro', new mongoose.Schema({
-    projeto: String, // Código da Obra
-    data: String,    // YYYY-MM-DD
-    tipo: String,    // 'Despesa' ou 'Receita'
-    categoria: String, // 'Material', 'Alimentação', 'Terceiros', 'Faturamento', etc.
-    descricao: String,
-    valor: Number
-}));
-
 // ==========================================
 // 🕵️‍♂️ FUNÇÃO DE AUDITORIA E ALERTAS
 // ==========================================
@@ -612,30 +602,94 @@ app.delete('/api/eventos/:id', async (req, res) => {
 });
 
 // ==========================================
-// 💰 ROTAS DO CONTROLE FINANCEIRO NATIVO 
+// 💰 INTEGRAÇÃO NATIVA: LER E SALVAR NO EXCEL (MICROSOFT 365)
 // ==========================================
+
+// 1. LER DADOS DIRETAMENTE DA PLANILHA DO PROJETO
 app.get('/api/financeiro/:projeto', async (req, res) => {
     try {
-        const lancamentos = await LancamentoFinanceiro.find({ projeto: req.params.projeto }).sort({ data: -1 });
-        res.json(lancamentos);
-    } catch (err) { res.status(500).json({ erro: err.message }); }
+        const projeto = req.params.projeto;
+        const client = await getGraphClient();
+        
+        if (!process.env.PLANILHA_URL) throw new Error("PLANILHA_URL ausente.");
+        
+        // Pega a referência da pasta onde estão os arquivos
+        const shareToken = encodeShareUrl(process.env.PLANILHA_URL);
+        const baseItem = await client.api(`/shares/${shareToken}/driveItem`).get();
+        const driveId = baseItem.parentReference.driveId;
+        const folderId = baseItem.parentReference.id;
+
+        try {
+            // Busca DIRETAMENTE o arquivo com o nome exato do projeto (ex: 230304.xlsx)
+            const file = await client.api(`/drives/${driveId}/items/${folderId}:/${projeto}.xlsx`).get();
+
+            // Lê as linhas que estão dentro da 'Tabela1' desse arquivo
+            const excelData = await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows`).get();
+            
+            // Transforma os dados pro formato que a tela precisa
+            const lancamentos = excelData.value.map((row, index) => {
+                return {
+                    _id: index.toString(), 
+                    data: row.values[0][0],
+                    tipo: row.values[0][1],
+                    categoria: row.values[0][2],
+                    descricao: row.values[0][3],
+                    valor: parseFloat(row.values[0][4]) || 0
+                };
+            }).reverse(); // Mostra do mais recente pro mais antigo
+
+            res.json(lancamentos);
+        } catch (fileError) {
+            // Se não achar o arquivo com o nome do projeto, retorna vazio pro frontend não quebrar
+            console.log(`Planilha não encontrada para o projeto: ${projeto}.xlsx`);
+            res.json([]); 
+        }
+
+    } catch (err) { 
+        console.error("Erro geral na leitura do Excel:", err.message);
+        res.status(500).json({ erro: err.message }); 
+    }
 });
 
-app.post('/api/financeiro', async (req, res) => {
+// 2. INSERIR NOVA LINHA DIRETAMENTE NA PLANILHA DO PROJETO
+app.post('/api/financeiro/inserir-excel', async (req, res) => {
     try {
-        const novo = new LancamentoFinanceiro(req.body);
-        await novo.save();
-        await registrarLog(req, `Registrou um lançamento de R$ ${novo.valor} na obra ${novo.projeto}`);
-        res.json({ sucesso: true, lancamento: novo });
-    } catch (err) { res.status(500).json({ erro: err.message }); }
+        const { projeto, data, tipo, categoria, descricao, valor } = req.body;
+        const client = await getGraphClient();
+
+        if (!process.env.PLANILHA_URL) throw new Error("PLANILHA_URL ausente.");
+        
+        const shareToken = encodeShareUrl(process.env.PLANILHA_URL);
+        const baseItem = await client.api(`/shares/${shareToken}/driveItem`).get();
+        const driveId = baseItem.parentReference.driveId;
+        const folderId = baseItem.parentReference.id;
+
+        // Busca DIRETAMENTE o arquivo com o nome exato do projeto
+        const file = await client.api(`/drives/${driveId}/items/${folderId}:/${projeto}.xlsx`).get();
+
+        if (!file) {
+            return res.status(404).json({ erro: `Planilha da obra ${projeto} não encontrada na nuvem.` });
+        }
+
+        // Monta a linha com os dados da tela (colunas: Data, Tipo, Categoria, Descrição, Valor)
+        const novaLinha = [[ data, tipo, categoria, descricao, valor ]];
+
+        // Escreve a linha dentro da 'Tabela1' do Excel
+        await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows/add`)
+            .post({ index: null, values: novaLinha });
+
+        await registrarLog(req, `Inseriu lançamento de R$ ${valor} direto na planilha Excel da obra ${projeto}`);
+        res.json({ sucesso: true, mensagem: "Adicionado com sucesso na planilha original!" });
+
+    } catch (error) {
+        console.error("❌ Erro ao escrever no Excel:", error.message);
+        res.status(500).json({ erro: "Falha de comunicação com o Excel: " + error.message });
+    }
 });
 
+// A exclusão de linhas específicas via Graph API é complexa, recomenda-se apagar direto no arquivo
 app.delete('/api/financeiro/:id', async (req, res) => {
-    try {
-        const lanc = await LancamentoFinanceiro.findByIdAndDelete(req.params.id);
-        await registrarLog(req, `Excluiu um lançamento financeiro da obra ${lanc?.projeto}`);
-        res.json({ sucesso: true });
-    } catch (err) { res.status(500).json({ erro: err.message }); }
+    res.status(400).json({ erro: "Para excluir um lançamento, abra o Excel original no seu OneDrive e apague a linha manualmente." });
 });
 
 // 3. Inicialização do Servidor
