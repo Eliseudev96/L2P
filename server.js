@@ -113,7 +113,8 @@ const Evento = mongoose.model('Evento', new mongoose.Schema({
     dataFim: String,
     tipo: String,       // ex: 'reuniao', 'manutencao', 'obra', etc
     descricao: String,
-    responsavel: String
+    responsavel: String,
+    calendario: { type: String, default: 'carro' }
 }));
 
 // 💰 MODELO DO CONTROLE FINANCEIRO NATIVO (MONGODB)
