@@ -617,91 +617,121 @@ app.delete('/api/eventos/:id', async (req, res) => {
 // ==========================================
 
 // Função à prova de falhas para buscar o arquivo no SharePoint
-async function getSharePointFile(client, fileName) {
-    console.log(`🔍 Buscando arquivo ${fileName} no SharePoint...`);
-    
-    // 1. Busca o Site pelo endereço exato da L2P
+// ==========================================
+// 💰 SHAREPOINT DINÂMICO (BUSCAR / LER / EDITAR)
+// ==========================================
+
+// 🔎 Pega site + drive automaticamente
+async function getDriveComercial(client) {
     const site = await client.api('/sites/l2pengenharialtda.sharepoint.com:/sites/Servidor').get();
-    console.log(`✅ Site encontrado. ID: ${site.id}`);
-
-    // 2. Busca as Bibliotecas (Drives) dentro desse site
     const drives = await client.api(`/sites/${site.id}/drives`).get();
-    
-    // 3. Procura a biblioteca "Comercial"
-    let targetDrive = drives.value.find(d => d.name === 'Comercial' || (d.webUrl && d.webUrl.includes('Comercial')));
-    
-    if (!targetDrive) {
-        console.log(`⚠️ Biblioteca Comercial não achada. Usando a padrão.`);
-        targetDrive = drives.value[0]; // Se não achar a Comercial, usa a primeira que existir
-    }
-    console.log(`✅ Drive selecionado: ${targetDrive.name}`);
 
-    // 4. Procura o arquivo exato lá dentro
-    const searchResult = await client.api(`/drives/${targetDrive.id}/root/search(q='${fileName}')`).get();
-    const file = searchResult.value.find(f => f.name.toLowerCase() === fileName.toLowerCase());
+    const drive = drives.value.find(d => d.name === 'Comercial') || drives.value[0];
 
-    return { driveId: targetDrive.id, file: file };
+    return {
+        driveId: drive.id
+    };
 }
 
-// 1. LER DADOS DO EXCEL (TRAVADO EM teste123.xlsx PARA TESTES)
-app.get('/api/financeiro/:projeto', async (req, res) => {
+// 🔎 1. BUSCAR PLANILHAS
+app.get('/api/planilhas/search', async (req, res) => {
     try {
+        const { q } = req.query;
         const client = await getGraphClient();
-        
-        const { driveId, file } = await getSharePointFile(client, 'teste123.xlsx');
 
-        if (!file) {
-            console.log(`⚠️ Planilha teste123.xlsx não existe no SharePoint.`);
-            return res.json([]); 
-        }
+        const { driveId } = await getDriveComercial(client);
 
-        console.log(`✅ Planilha achada! Lendo a Tabela1...`);
-        const excelData = await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows`).get();
-        
-        const lancamentos = excelData.value.map((row, index) => {
-            return {
-                _id: index.toString(), 
-                data: row.values[0][0],
-                tipo: row.values[0][1],
-                categoria: row.values[0][2],
-                descricao: row.values[0][3],
-                valor: parseFloat(row.values[0][4]) || 0
-            };
-        }).reverse();
+        const result = await client
+            .api(`/drives/${driveId}/root/search(q='${q}')`)
+            .get();
 
-        res.json(lancamentos);
+        const arquivos = result.value
+            .filter(f => f.name.endsWith('.xlsx'))
+            .map(f => ({
+                id: f.id,
+                nome: f.name,
+                driveId
+            }));
 
-    } catch (err) { 
-        console.error("❌ Erro fatal na leitura do Excel:", err.message);
-        // Agora retorna um erro limpo em vez de quebrar a tela
-        res.status(500).json({ erro: err.message }); 
+        res.json(arquivos);
+
+    } catch (err) {
+        console.error("❌ Erro ao buscar planilhas:", err.message);
+        res.status(500).json({ erro: err.message });
     }
 });
 
-// 2. INSERIR NOVA LINHA (TRAVADO EM teste123.xlsx PARA TESTES)
-app.post('/api/financeiro/inserir-excel', async (req, res) => {
+// 📄 2. LER PLANILHA
+app.get('/api/planilhas/ler', async (req, res) => {
     try {
-        const { data, tipo, categoria, descricao, valor } = req.body;
+        const { fileId, driveId } = req.query;
         const client = await getGraphClient();
 
-        const { driveId, file } = await getSharePointFile(client, 'teste123.xlsx');
+        const excel = await client
+            .api(`/drives/${driveId}/items/${fileId}/workbook/tables/Tabela1/rows`)
+            .get();
 
-        if (!file) {
-            return res.status(404).json({ erro: `A planilha teste123.xlsx não foi encontrada na pasta Comercial do SharePoint.` });
-        }
+        const dados = excel.value.map((row, index) => ({
+            _id: index,
+            data: row.values[0][0],
+            tipo: row.values[0][1],
+            categoria: row.values[0][2],
+            descricao: row.values[0][3],
+            valor: row.values[0][4]
+        }));
 
-        const novaLinha = [[ data, tipo, categoria, descricao, valor ]];
+        res.json(dados);
 
-        console.log(`✅ Escrevendo dados na Tabela1...`);
-        await client.api(`/drives/${driveId}/items/${file.id}/workbook/tables/Tabela1/rows/add`)
-            .post({ index: null, values: novaLinha });
+    } catch (err) {
+        console.error("❌ Erro ao ler planilha:", err.message);
+        res.status(500).json({ erro: err.message });
+    }
+});
 
-        await registrarLog(req, `Inseriu lançamento de R$ ${valor} direto na planilha do SharePoint (teste123)`);
-        res.json({ sucesso: true, mensagem: "Adicionado com sucesso na planilha teste123!" });
+// ✏️ 3. EDITAR LINHA
+app.put('/api/planilhas/editar', async (req, res) => {
+    try {
+        const { fileId, driveId, rowIndex, valores } = req.body;
+        const client = await getGraphClient();
 
-    } catch (error) {
-        console.error("❌ Erro ao escrever no SharePoint:", error.message);
-        res.status(500).json({ erro: "Falha de comunicação com o SharePoint: " + error.message });
+        const linhaExcel = rowIndex + 2; // pula cabeçalho
+
+        await client
+            .api(`/drives/${driveId}/items/${fileId}/workbook/worksheets('Planilha1')/range(address='A${linhaExcel}:E${linhaExcel}')`)
+            .patch({
+                values: [valores]
+            });
+
+        await registrarLog(req, `Editou linha ${rowIndex} na planilha ${fileId}`);
+
+        res.json({ sucesso: true });
+
+    } catch (err) {
+        console.error("❌ Erro ao editar:", err.message);
+        res.status(500).json({ erro: err.message });
+    }
+});
+
+// ➕ 4. INSERIR NOVA LINHA
+app.post('/api/planilhas/inserir', async (req, res) => {
+    try {
+        const { fileId, driveId, data, tipo, categoria, descricao, valor } = req.body;
+        const client = await getGraphClient();
+
+        await client
+            .api(`/drives/${driveId}/items/${fileId}/workbook/tables/Tabela1/rows/add`)
+            .post({
+                index: null,
+                values: [[data, tipo, categoria, descricao, valor]]
+            });
+
+        await registrarLog(req, `Inseriu novo lançamento na planilha ${fileId}`);
+
+        res.json({ sucesso: true });
+
+    } catch (err) {
+        console.error("❌ Erro ao inserir:", err.message);
+        res.status(500).json({ erro: err.message });
     }
 });
 
