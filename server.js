@@ -109,7 +109,9 @@ const Alerta = mongoose.model('Alerta', new mongoose.Schema({
 // 📅 MODELO DA AGENDA COMPARTILHADA
 const Evento = mongoose.model('Evento', new mongoose.Schema({
     titulo: String,
-    dataInicio: String, // formato YYYY-MM-DD ou ISO
+    dataInicio: String,
+    horaInicio: String, // <--- ADICIONADO
+    horaFim: String,// formato YYYY-MM-DD ou ISO
     dataFim: String,
     tipo: String,       // ex: 'reuniao', 'manutencao', 'obra', etc
     descricao: String,
