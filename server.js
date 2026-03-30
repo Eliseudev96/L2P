@@ -553,7 +553,7 @@ app.delete('/api/alertas', async (req, res) => {
     catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-// --- ROTAS DA AGENDA COMPARTILHADA ---
+// --- ROTAS DA AGENDA COMPARTILHADA (AGORA GERA NOTIFICAÇÃO PRA TODOS) ---
 app.get('/api/eventos', async (req, res) => {
     try {
         const eventos = await Evento.find().sort({ dataInicio: 1 });
@@ -569,14 +569,13 @@ app.post('/api/eventos', async (req, res) => {
         const usuarioLogado = req.headers['x-usuario'] || 'Usuário Desconhecido';
         await registrarLog(req, `Agendou compromisso: ${novoEvento.titulo}`);
 
-        if (usuarioLogado !== 'Gerência' && usuarioLogado !== 'Gerência L2P') {
-            const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-            await Alerta.create({
-                data: dataHora,
-                texto: `${usuarioLogado} agendou: ${novoEvento.titulo} (${novoEvento.dataInicio})`,
-                tipo: 'alerta'
-            });
-        }
+        // 🔔 ALERTA LIBERADO PRA TODO MUNDO (Removida a trava da Gerência)
+        const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        await Alerta.create({
+            data: dataHora,
+            texto: `${usuarioLogado} agendou: ${novoEvento.titulo} (${novoEvento.dataInicio})`,
+            tipo: 'alerta'
+        });
 
         res.json({ sucesso: true, evento: novoEvento });
     } catch (err) { res.status(500).json({ erro: err.message }); }
@@ -598,7 +597,8 @@ app.delete('/api/eventos/:id', async (req, res) => {
         const usuarioLogado = req.headers['x-usuario'] || 'Usuário Desconhecido';
         await registrarLog(req, `Cancelou evento da agenda: ${evento?.titulo}`);
 
-        if (usuarioLogado !== 'Gerência' && usuarioLogado !== 'Gerência L2P' && evento) {
+        // 🔔 ALERTA LIBERADO PRA TODO MUNDO (Removida a trava da Gerência)
+        if (evento) {
             const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             await Alerta.create({
                 data: dataHora,
@@ -612,11 +612,6 @@ app.delete('/api/eventos/:id', async (req, res) => {
 });
 
 
-// ==========================================
-// 💰 INTEGRAÇÃO NATIVA: LER E SALVAR NO SHAREPOINT (l2pengenharialtda)
-// ==========================================
-
-// Função à prova de falhas para buscar o arquivo no SharePoint
 // ==========================================
 // 💰 SHAREPOINT DINÂMICO (BUSCAR / LER / EDITAR)
 // ==========================================
