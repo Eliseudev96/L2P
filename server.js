@@ -280,6 +280,22 @@ cron.schedule('0 2 * * *', async () => {
 // --- ROTAS DA API ---
 // ==========================================
 
+// --- 🌐 PROXY PARA GOOGLE APPS SCRIPT (CORS FIX) ---
+// Adicionado para corrigir o erro "404 Not Found" ao gerar a planilha
+app.get('/api/google-proxy', async (req, res) => {
+    try {
+        const targetUrl = req.query.url;
+        if (!targetUrl) return res.status(400).json({ erro: "URL de destino não fornecida." });
+
+        const response = await fetch(targetUrl);
+        const data = await response.json();
+        res.json(data);
+    } catch (err) {
+        console.error("❌ Erro no Google Proxy:", err.message);
+        res.status(500).json({ erro: "Falha ao conectar com o Google Script" });
+    }
+});
+
 // --- ROTA DE LOGIN REAL ---
 app.post('/api/login', async (req, res) => {
     const { usuario, senha } = req.body;
