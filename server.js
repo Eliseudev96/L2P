@@ -281,7 +281,6 @@ cron.schedule('0 2 * * *', async () => {
 // ==========================================
 
 // --- 🌐 PROXY PARA GOOGLE APPS SCRIPT (CORS FIX) ---
-// Adicionado para corrigir o erro "404 Not Found" ao gerar a planilha
 app.get('/api/google-proxy', async (req, res) => {
     try {
         const targetUrl = req.query.url;
@@ -572,7 +571,7 @@ app.delete('/api/alertas', async (req, res) => {
     catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-// --- ROTAS DA AGENDA COMPARTILHADA (AGORA GERA NOTIFICAÇÃO PRA TODOS) ---
+// --- ROTAS DA AGENDA COMPARTILHADA ---
 app.get('/api/eventos', async (req, res) => {
     try {
         const eventos = await Evento.find().sort({ dataInicio: 1 });
@@ -588,7 +587,6 @@ app.post('/api/eventos', async (req, res) => {
         const usuarioLogado = req.headers['x-usuario'] || 'Usuário Desconhecido';
         await registrarLog(req, `Agendou compromisso: ${novoEvento.titulo}`);
 
-        // 🔔 ALERTA LIBERADO PRA TODO MUNDO (Removida a trava da Gerência)
         const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
         await Alerta.create({
             data: dataHora,
@@ -616,7 +614,6 @@ app.delete('/api/eventos/:id', async (req, res) => {
         const usuarioLogado = req.headers['x-usuario'] || 'Usuário Desconhecido';
         await registrarLog(req, `Cancelou evento da agenda: ${evento?.titulo}`);
 
-        // 🔔 ALERTA LIBERADO PRA TODO MUNDO (Removida a trava da Gerência)
         if (evento) {
             const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             await Alerta.create({
@@ -632,7 +629,66 @@ app.delete('/api/eventos/:id', async (req, res) => {
 
 
 // ==========================================
-// 💰 SHAREPOINT DINÂMICO (BUSCAR / LER / EDITAR)
+// 💰 ROTAS DO FINANCEIRO LOCAL (NOVO FLUXO DE CAIXA)
+// ==========================================
+
+// GET: Buscar transações financeiras locais de um projeto
+app.get('/api/projetos/:idProjeto/financeiro', async (req, res) => {
+    try {
+        const { idProjeto } = req.params;
+        const transacoes = await LancamentoFinanceiro.find({ projeto: idProjeto });
+        
+        // Mapeia para devolver um ID em formato de string amigável para o React
+        const dadosFormatados = transacoes.map(t => ({
+            id: t._id.toString(),
+            data: t.data,
+            tipo: t.tipo,
+            categoria: t.categoria,
+            descricao: t.descricao,
+            valor: t.valor
+        }));
+        
+        res.json(dadosFormatados);
+    } catch (err) {
+        console.error("❌ Erro ao buscar financeiro:", err.message);
+        res.status(500).json({ erro: 'Falha ao buscar os dados financeiros.' });
+    }
+});
+
+// POST: Salvar (Sobrescrever) as transações do projeto
+app.post('/api/projetos/:idProjeto/financeiro', async (req, res) => {
+    try {
+        const { idProjeto } = req.params;
+        const { transacoes } = req.body; 
+
+        // Como o front envia a lista inteira a cada "Salvar", limpamos os dados daquela obra
+        await LancamentoFinanceiro.deleteMany({ projeto: idProjeto });
+
+        // Insere a nova lista de volta
+        if (transacoes && transacoes.length > 0) {
+            const novosLancamentos = transacoes.map(t => ({
+                projeto: idProjeto,
+                data: t.data,
+                tipo: t.tipo,
+                categoria: t.categoria,
+                descricao: t.descricao,
+                valor: t.valor
+            }));
+            await LancamentoFinanceiro.insertMany(novosLancamentos);
+        }
+
+        await registrarLog(req, `Atualizou o fluxo de caixa (local) do projeto: ${idProjeto}`);
+
+        res.status(200).json({ sucesso: true, mensagem: 'Dados financeiros salvos com sucesso!' });
+    } catch (erro) {
+        console.error('❌ Erro ao salvar financeiro:', erro.message);
+        res.status(500).json({ erro: 'Falha ao salvar os dados no servidor.' });
+    }
+});
+
+
+// ==========================================
+// 🔗 SHAREPOINT DINÂMICO (BUSCAR / LER / EDITAR)
 // ==========================================
 
 // 🔎 Pega site + drive automaticamente
@@ -749,7 +805,7 @@ app.post('/api/planilhas/inserir', async (req, res) => {
     }
 });
 
-// 📥 5. BAIXAR PLANILHA CRUA (Para o Dashboard Automático) <-- ADICIONADO AQUI!
+// 📥 5. BAIXAR PLANILHA CRUA (Para o Dashboard Automático)
 app.get('/api/planilhas/download', async (req, res) => {
     try {
         const { q } = req.query; // ex: 'RH'
@@ -775,7 +831,7 @@ app.get('/api/planilhas/download', async (req, res) => {
 });
 
 app.delete('/api/financeiro/:id', async (req, res) => {
-    res.status(400).json({ erro: "Para excluir um lançamento, abra o Excel no seu SharePoint e apague a linha manualmente." });
+    res.status(400).json({ erro: "Para excluir um lançamento antigo, utilize o novo fluxo local ou abra o Excel no SharePoint." });
 });
 
 // 3. Inicialização do Servidor
