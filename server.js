@@ -106,27 +106,49 @@ const Alerta = mongoose.model('Alerta', new mongoose.Schema({
     lido: { type: Boolean, default: false } 
 }));
 
-// 📅 MODELO DA AGENDA COMPARTILHADA
+// 📅 MODELO DA AGENDA COMPARTILHADA (VEÍCULOS/REUNIÕES)
 const Evento = mongoose.model('Evento', new mongoose.Schema({
     titulo: String,
-    dataInicio: String, // formato YYYY-MM-DD ou ISO
-    horaInicio: String, // <--- HORÁRIOS ADICIONADOS AQUI!
+    dataInicio: String, 
+    horaInicio: String, 
     horaFim: String,
     dataFim: String,
-    tipo: String,       // ex: 'reuniao', 'manutencao', 'obra', etc
+    tipo: String,       
     descricao: String,
     responsavel: String,
     calendario: { type: String, default: 'carro' }
 }));
 
-// 💰 MODELO DO CONTROLE FINANCEIRO NATIVO (MONGODB)
+// 📅 MODELO DA AGENDA DE ALOCAÇÃO DE EQUIPA (NOVO!)
+const Alocacao = mongoose.model('Alocacao', new mongoose.Schema({
+    colaboradorMat: String,
+    colaboradorNome: String,
+    projeto: String,
+    dataInicio: String,
+    dataFim: String,
+    status: String,
+    observacao: String
+}));
+
+// 💰 MODELO DO CONTROLE FINANCEIRO NATIVO (ATUALIZADO!)
 const LancamentoFinanceiro = mongoose.model('LancamentoFinanceiro', new mongoose.Schema({
-    projeto: String, // Código da Obra
-    data: String,    // YYYY-MM-DD
-    tipo: String,    // 'Despesa' ou 'Receita'
-    categoria: String, // 'Material', 'Alimentação', 'Terceiros', 'Faturamento', etc.
-    descricao: String,
-    valor: Number
+    projeto: String, 
+    previstos: {
+        receita: String,
+        imposto: String,
+        margem: String,
+        material: String,
+        servico: String,
+        custoFinanceiro: String
+    },
+    transacoes: [{
+        id: String,
+        data: String,
+        tipo: String,
+        categoria: String,
+        descricao: String,
+        valor: Number
+    }]
 }));
 
 // ==========================================
@@ -629,55 +651,90 @@ app.delete('/api/eventos/:id', async (req, res) => {
 
 
 // ==========================================
-// 💰 ROTAS DO FINANCEIRO LOCAL (NOVO FLUXO DE CAIXA)
+// 📅 ROTAS DA NOVA AGENDA DE ALOCAÇÃO (MÊS)
 // ==========================================
 
-// GET: Buscar transações financeiras locais de um projeto
+app.get('/api/alocacoes', async (req, res) => {
+    try {
+        const alocacoes = await Alocacao.find();
+        res.json(alocacoes);
+    } catch (err) {
+        res.status(500).json({ erro: err.message });
+    }
+});
+
+app.post('/api/alocacoes', async (req, res) => {
+    try {
+        const novaAloc = new Alocacao(req.body);
+        await novaAloc.save();
+        await registrarLog(req, `Criou alocação para ${novaAloc.colaboradorNome} na obra ${novaAloc.projeto || 'N/A'}`);
+        res.json(novaAloc);
+    } catch (err) {
+        res.status(500).json({ erro: err.message });
+    }
+});
+
+app.put('/api/alocacoes/:id', async (req, res) => {
+    try {
+        const alocAtualizada = await Alocacao.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        await registrarLog(req, `Atualizou a alocação de ${alocAtualizada.colaboradorNome}`);
+        res.json(alocAtualizada);
+    } catch (err) {
+        res.status(500).json({ erro: err.message });
+    }
+});
+
+app.delete('/api/alocacoes/:id', async (req, res) => {
+    try {
+        const aloc = await Alocacao.findById(req.params.id);
+        await Alocacao.findByIdAndDelete(req.params.id);
+        if(aloc) await registrarLog(req, `Removeu alocação de ${aloc.colaboradorNome}`);
+        res.json({ sucesso: true });
+    } catch (err) {
+        res.status(500).json({ erro: err.message });
+    }
+});
+
+
+// ==========================================
+// 💰 ROTAS DO FINANCEIRO LOCAL (PREVISTO + REALIZADO)
+// ==========================================
+
 app.get('/api/projetos/:idProjeto/financeiro', async (req, res) => {
     try {
         const { idProjeto } = req.params;
-        const transacoes = await LancamentoFinanceiro.find({ projeto: idProjeto });
+        const financeiro = await LancamentoFinanceiro.findOne({ projeto: idProjeto });
         
-        // Mapeia para devolver um ID em formato de string amigável para o React
-        const dadosFormatados = transacoes.map(t => ({
-            id: t._id.toString(),
-            data: t.data,
-            tipo: t.tipo,
-            categoria: t.categoria,
-            descricao: t.descricao,
-            valor: t.valor
-        }));
-        
-        res.json(dadosFormatados);
+        if (financeiro) {
+            res.json({
+                previstos: financeiro.previstos || {},
+                transacoes: financeiro.transacoes || []
+            });
+        } else {
+            res.json({ previstos: {}, transacoes: [] });
+        }
     } catch (err) {
         console.error("❌ Erro ao buscar financeiro:", err.message);
         res.status(500).json({ erro: 'Falha ao buscar os dados financeiros.' });
     }
 });
 
-// POST: Salvar (Sobrescrever) as transações do projeto
 app.post('/api/projetos/:idProjeto/financeiro', async (req, res) => {
     try {
         const { idProjeto } = req.params;
-        const { transacoes } = req.body; 
+        const { previstos, transacoes } = req.body; 
 
-        // Como o front envia a lista inteira a cada "Salvar", limpamos os dados daquela obra
-        await LancamentoFinanceiro.deleteMany({ projeto: idProjeto });
-
-        // Insere a nova lista de volta
-        if (transacoes && transacoes.length > 0) {
-            const novosLancamentos = transacoes.map(t => ({
+        await LancamentoFinanceiro.findOneAndUpdate(
+            { projeto: idProjeto }, 
+            { 
                 projeto: idProjeto,
-                data: t.data,
-                tipo: t.tipo,
-                categoria: t.categoria,
-                descricao: t.descricao,
-                valor: t.valor
-            }));
-            await LancamentoFinanceiro.insertMany(novosLancamentos);
-        }
+                previstos: previstos,
+                transacoes: transacoes 
+            }, 
+            { upsert: true, new: true }
+        );
 
-        await registrarLog(req, `Atualizou o fluxo de caixa (local) do projeto: ${idProjeto}`);
+        await registrarLog(req, `Atualizou orçamento/fluxo de caixa do projeto: ${idProjeto}`);
 
         res.status(200).json({ sucesso: true, mensagem: 'Dados financeiros salvos com sucesso!' });
     } catch (erro) {
@@ -828,10 +885,6 @@ app.get('/api/planilhas/download', async (req, res) => {
         console.error("❌ Erro ao gerar link de download:", err.message);
         res.status(500).json({ erro: err.message });
     }
-});
-
-app.delete('/api/financeiro/:id', async (req, res) => {
-    res.status(400).json({ erro: "Para excluir um lançamento antigo, utilize o novo fluxo local ou abra o Excel no SharePoint." });
 });
 
 // 3. Inicialização do Servidor
