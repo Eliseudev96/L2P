@@ -146,7 +146,8 @@ const LancamentoFinanceiro = mongoose.model('LancamentoFinanceiro', new mongoose
         margem: String,
         material: String,
         servico: String,
-        custoFinanceiro: String
+        custoFinanceiro: String,
+        impostoRealizado: String
     },
     transacoes: [{
         id: String,
