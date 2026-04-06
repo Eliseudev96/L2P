@@ -77,6 +77,13 @@ const ItemEstoque = mongoose.model('Estoque', new mongoose.Schema({
     ultimaAtualizacao: String
 }));
 
+// 🦺 MODELO DO ESTOQUE DE EPI (NOVO!)
+const Epi = mongoose.model('Epi', new mongoose.Schema({
+    item: String,
+    qtd: { type: Number, default: 0 },
+    min: { type: Number, default: 0 }
+}));
+
 // --- MODELOS DE SEGURANÇA E CONFIGURAÇÕES ---
 const Usuario = mongoose.model('Usuario', new mongoose.Schema({
     nome: String,
@@ -119,7 +126,7 @@ const Evento = mongoose.model('Evento', new mongoose.Schema({
     calendario: { type: String, default: 'carro' }
 }));
 
-// 📅 MODELO DA AGENDA DE ALOCAÇÃO DE EQUIPA (NOVO!)
+// 📅 MODELO DA AGENDA DE ALOCAÇÃO DE EQUIPA
 const Alocacao = mongoose.model('Alocacao', new mongoose.Schema({
     colaboradorMat: String,
     colaboradorNome: String,
@@ -130,7 +137,7 @@ const Alocacao = mongoose.model('Alocacao', new mongoose.Schema({
     observacao: String
 }));
 
-// 💰 MODELO DO CONTROLE FINANCEIRO NATIVO (ATUALIZADO!)
+// 💰 MODELO DO CONTROLE FINANCEIRO NATIVO
 const LancamentoFinanceiro = mongoose.model('LancamentoFinanceiro', new mongoose.Schema({
     projeto: String, 
     previstos: {
@@ -539,7 +546,7 @@ app.delete('/api/equipe/:mat', async (req, res) => {
     res.json({sucesso:true}); 
 });
 
-// --- ROTAS DE ESTOQUE ---
+// --- ROTAS DE ESTOQUE (MATERIAIS/FERRAMENTAS) ---
 app.get('/api/estoque', async (req, res) => {
     try {
         const itens = await ItemEstoque.find().sort({ descricao: 1 });
@@ -576,6 +583,49 @@ app.delete('/api/estoque/:id', async (req, res) => {
         res.json({ sucesso: true });
     } catch (err) { res.status(500).json({ erro: err.message }); }
 });
+
+// --- ROTAS DE EPI (SEGURANÇA) ---
+app.get('/api/epis', async (req, res) => {
+    try {
+        const epis = await Epi.find().sort({ item: 1 });
+        res.json(epis);
+    } catch (err) { 
+        res.status(500).json({ erro: err.message }); 
+    }
+});
+
+app.post('/api/epis', async (req, res) => {
+    try {
+        const novoEpi = new Epi(req.body);
+        await novoEpi.save();
+        await registrarLog(req, `Cadastrou novo EPI: ${novoEpi.item}`);
+        res.json(novoEpi);
+    } catch (err) { 
+        res.status(500).json({ erro: err.message }); 
+    }
+});
+
+app.put('/api/epis/:id', async (req, res) => {
+    try {
+        const epiAtualizado = await Epi.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        await registrarLog(req, `Atualizou o estoque do EPI: ${epiAtualizado.item} para a quantidade: ${epiAtualizado.qtd}`);
+        res.json(epiAtualizado);
+    } catch (err) { 
+        res.status(500).json({ erro: err.message }); 
+    }
+});
+
+app.delete('/api/epis/:id', async (req, res) => {
+    try {
+        const epi = await Epi.findById(req.params.id);
+        await Epi.findByIdAndDelete(req.params.id);
+        if (epi) await registrarLog(req, `Removeu o EPI: ${epi.item} do controle de estoque`);
+        res.json({ sucesso: true });
+    } catch (err) { 
+        res.status(500).json({ erro: err.message }); 
+    }
+});
+
 
 // --- ROTAS DE ALERTAS PARA O FRONTEND ---
 app.get('/api/alertas', async (req, res) => {
